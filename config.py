@@ -1,0 +1,49 @@
+from pathlib import Path
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+DATA_DIR = Path(__file__).resolve().parent
+LOG_DIR = DATA_DIR / "logs"
+OUT_DIR = DATA_DIR / "outputs"
+LOG_DIR.mkdir(exist_ok=True)
+OUT_DIR.mkdir(exist_ok=True)
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")  # TODO: можно заменить в .env
+DEFAULT_ENV_CONTEXT_INDEX = int(os.getenv("ENV_CONTEXT_INDEX", "0"))  # 0..2
+
+TEMPERATURE = 0.7
+MAX_TOKENS = 600
+TURNS_BETWEEN_PLOTS = 5
+
+VIZ_EDGE_WINDOW = 12         # последние N ходов для рёбер
+VIZ_TOP_EDGE_LABELS = 6      # подписывать не больше N самых сильных рёбер
+VIZ_SEED = 42                # фиксируем раскладку, чтобы "картинка не прыгала"
+
+# базовые агенты
+DEFAULT_AGENTS = [
+    {
+        "name": "Исследователь",
+        "nature": "explorer",
+        "color": "#4F46E5",
+    },
+    {
+        "name": "Критик",
+        "nature": "critic",
+        "color": "#DC2626",
+    },
+    {
+        "name": "Медиатор",
+        "nature": "mediator",
+        "color": "#059669",
+    },
+]
+
+USER_AGENT = {
+    "name": "Пользователь",
+    "nature": "human",
+    "color": "#405686",
+    "is_human": True,
+}
