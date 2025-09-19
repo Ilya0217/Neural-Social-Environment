@@ -22,5 +22,5 @@
 
 ### 1. Клонирование проекта
 ```bash
-git clone https://github.com/ваш-репозиторий/agent-dialogue-sim.git
+git clone https://github.com/Ilya0217/Neural-Social-Environment.git
 cd agent-dialogue-sim
