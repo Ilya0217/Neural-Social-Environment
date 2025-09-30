@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agent Dialogue — Web</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container" data-env-count="{{ envs|length }}">
+        <header class="header">
+            <div>
+                <h1>Agent Dialogue</h1>
+                <p class="subtitle">Graphs and hypotheses update every 5 messages</p>
+            </div>
+            <div class="controls">
+                <select id="envSelect" class="select">
+                    {% for e in envs %}
+                        <option value="{{ loop.index0 }}">{{ e }}</option>
+                    {% endfor %}
+                </select>
+                <button id="startBtn" class="btn">Start</button>
+                <button id="stepBtn" class="btn btn-primary" disabled>Next message</button>
+                <a class="btn btn-download" id="downloadLog" href="/download/log">Download JSONL</a>
+            </div>
+        </header>
+
+        <main class="grid">
+            <section class="panel transcript">
+                <h2>Transcript</h2>
+                <div id="transcript" class="scroll"></div>
+            </section>
+
+            <section class="panel graph">
+                <h2>Interaction graph</h2>
+                <div class="img-wrap">
+                    <img id="graphImg" src="" alt="Graph" />
+                </div>
+            </section>
+
+            <section class="panel insights">
+                <h2>Hypotheses</h2>
+                <ul id="hyps" class="list"></ul>
+            </section>
+
+            <section class="panel metrics">
+                <h2>Metrics (latest window)</h2>
+                <div id="metrics" class="scroll"></div>
+            </section>
+        </main>
+
+        <footer class="footer">
+            <span id="status">Ready</span>
+        </footer>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+<!-- Minimal HTML; UI is styled by static/style.css and controlled by static/app.js -->
+</html>
+
+

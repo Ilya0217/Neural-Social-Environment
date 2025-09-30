@@ -19,12 +19,12 @@ class DialogueManager:
     turn_no: int = 0
     edges_window: List[Dict[str, Any]] = field(default_factory=list)  # для визуализаций последнего окна
 
-    # 1) Индекс говорящего по кругу (фолбэк)
+    # 1) Next speaker index (round-robin fallback)
     def next_speaker_idx(self) -> int:
-        # turn_no увеличивается в КОНЦЕ step(), поэтому здесь используем текущее значение
+        # turn_no is incremented at the end of step(), so use current value here
         return (self.turn_no) % len(self.agents)
 
-    # 2) Сборка сообщений (если уже внесён текст про участников — оставь как есть)
+    # 2) Build messages for the model (keeps prior participants text intact)
     def build_messages(self, agent_idx: int) -> List[Dict[str, str]]:
         agent = self.agents[agent_idx]
         last_msgs = self.history[-8:]
@@ -33,15 +33,15 @@ class DialogueManager:
         )
         participants = ", ".join(a.name for a in self.agents)
         sys = (
-            f"Окружение и контекст: {self.env_context}\n\n"
+            f"Environment and context: {self.env_context}\n\n"
             + agent.system_prompt
             + "\n\n"
             + SESSION_GOAL
-            + "\n\nУчастники разговора: " + participants +
-            "\nПравило адресации: обязательно выбери одного адресата (target) из списка участников, кроме себя. "
-            "Никогда не используй all/null/всем. Пиши коротко — 1–2 предложения.\n\n"
-            + "Контекст последних сообщений:\n"
-            + (content_summary or "(пока пусто)")
+            + "\n\nParticipants: " + participants +
+            "\nAddressing rule: always pick a single addressee (target) from participants other than yourself. "
+            "Never use all/null. Keep it short: 1–2 sentences. English only.\n\n"
+            + "Recent messages context:\n"
+            + (content_summary or "(empty yet)")
             + "\n\n"
             + STRUCTURE_INSTRUCTION
             + "\n\n"
@@ -62,13 +62,13 @@ class DialogueManager:
                 parsed.target = allowed_targets[0] if allowed_targets else None
             return parsed
 
-        # tools (function calling) с жестким перечислением адресатов
+        # tools (function calling) with strict list of allowed targets
         tools = [
             {
                 "type": "function",
                 "function": {
                     "name": "submit_agent_turn",
-                    "description": "Строго структурированный ответ агента.",
+                    "description": "Strictly structured agent reply.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -101,7 +101,7 @@ class DialogueManager:
                 args_str = tool_calls[0].function.arguments
                 parsed = AgentTurn.model_validate_json(args_str)
                 return _fix_target(parsed)   # ← ДОБАВЛЕНО
-            # если почему-то tool не вызван — попробуем распарсить контент
+            # if tool was not called, try parsing content JSON
             content = choice.message.content or ""
             m = re.search(r"\{.*\}", content, re.S)
             if m:
@@ -110,7 +110,7 @@ class DialogueManager:
         except Exception as e:
             print(f"[tools path error] {e}", file=sys.stderr)
 
-            # B) Жёсткий текстовый запрос одного JSON-объекта
+            # B) Strict text request for a single JSON object
             tough_messages = messages + [
                 {"role": "user", "content":
                     "Return ONLY one valid minified JSON object with keys: reply, tone, emotion, target. "
@@ -134,17 +134,17 @@ class DialogueManager:
             except Exception as e:
                 print(f"[text path error] {e}", file=sys.stderr)
 
-        # C) Фолбэк (на всякий случай выбираем первого допустимого)
+        # C) Fallback (pick first allowed target)
         return AgentTurn(
-            reply="(не удалось распарсить ответ модели)",
+            reply="(failed to parse model reply)",
             tone="neutral",
             emotion="neutral",
             target=allowed_targets[0] if allowed_targets else None,
         )
 
-    # 3) Шаг симуляции — ПЕРЕДАЁМ allowed_targets во model_turn и даём слово адресату
+    # 3) Simulation step — pass allowed_targets to model_turn and give word to addressee
     def step(self):
-        # выбор следующего говорящего (как у вас было)
+        # pick next speaker (prefer last target)
         if self.history and self.history[-1].get("target"):
             tgt = self.history[-1]["target"]
             idx = next((i for i, a in enumerate(self.agents) if a.name == tgt), self.next_speaker_idx())
@@ -153,17 +153,17 @@ class DialogueManager:
 
         speaker = self.agents[idx]
 
-        # Кого можно адресовать (все, кроме себя)
+        # Allowed targets (all except self)
         allowed_targets = [a.name for a in self.agents if a.name != speaker.name] or [a.name for a in self.agents]
 
-        # НОВОЕ: если это «живой» агент — получаем ход через HumanIO
+        # If this is a human agent — get turn via HumanIO
         if getattr(speaker, "is_human", False) and self.human_io:
             parsed: AgentTurn = self.human_io.get_user_turn(speaker.name, allowed_targets, self.history)
         else:
             messages = self.build_messages(idx)
             parsed: AgentTurn = self.model_turn(messages, allowed_targets)
 
-        # увеличиваем номер хода и фиксируем
+        # increment turn and record
         self.turn_no += 1
         target = normalize_target(parsed.target)
 
@@ -181,12 +181,12 @@ class DialogueManager:
 
         if target:
             self.edges_window.append({"src": speaker.name, "dst": target, "tone": parsed.tone})
-            if len(self.edges_window) > 10:  # (см. замечание про синхронизацию с конфигом)
+            if len(self.edges_window) > 10:  # keep small window for quick graph refresh
                 self.edges_window = self.edges_window[-10:]
 
         self.history.append(record)
         return record, ({"src": speaker.name, "dst": target, "tone": parsed.tone} if target else None)
     
     def should_plot(self) -> bool:
-        # рисуем каждые TURNS_BETWEEN_PLOTS ходов
+        # plot every TURNS_BETWEEN_PLOTS turns
         return self.turn_no > 0 and (self.turn_no % TURNS_BETWEEN_PLOTS == 0)

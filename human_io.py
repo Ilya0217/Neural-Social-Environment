@@ -3,16 +3,16 @@ import re
 from .prompts import AgentTurn
 
 class HumanIO:
-    """
-    CLI-адаптер для «живого» агента. В web-версии можно заменить
-    на UI-коллбеки — сигнатура get_user_turn та же.
+    """CLI adapter for a live human agent.
+
+    In the web version, replace with UI callbacks; keep get_user_turn signature the same.
     """
     def __init__(self, client=None, classify_with_model: bool = True):
         self.client = client
         self.classify_with_model = classify_with_model
 
     def _extract_tags(self, text: str) -> Dict[str, str]:
-        # мини-парсер для /tone:positive /emotion:curious
+        # mini-parser for /tone:positive /emotion:curious
         tags = {}
         m_tone = re.search(r"/tone:(positive|neutral|negative)", text, re.I)
         m_emo  = re.search(r"/emotion:([a-zA-Z\- ]{2,32})", text)
@@ -21,7 +21,7 @@ class HumanIO:
         return tags
 
     def _classify(self, text: str) -> Dict[str, str]:
-        # лёгкая классификация через модель (если доступна)
+        # lightweight classification via model (if available)
         if not (self.client and self.classify_with_model):
             return {"tone": "neutral", "emotion": "neutral"}
         prompt = [
@@ -47,31 +47,31 @@ class HumanIO:
         allowed_targets: List[str],
         history: List[Dict[str, Any]],
     ) -> AgentTurn:
-        print(f"\n[{speaker_name}] К вам обратились. Ваша очередь отвечать.")
-        # короткий контекст последних 6 сообщений
+        print(f"\n[{speaker_name}] You were addressed. It's your turn to reply.")
+        # brief context of the last 6 messages
         for h in history[-6:]:
-            tgt = h.get("target") or "всем"
+            tgt = h.get("target") or "all"
             print(f"  {h['speaker']}→{tgt}: {h['reply']}")
 
         # 1) Текст
-        user_text = input("\nВведите вашу реплику (можно добавить /tone:positive /emotion:curious):\n> ").strip()
+        user_text = input("\nEnter your reply (you can add /tone:positive /emotion:curious):\n> ").strip()
         tags = self._extract_tags(user_text)
         # уберём подсказки из текста
         user_text = re.sub(r"/tone:[^\s]+", "", user_text, flags=re.I)
         user_text = re.sub(r"/emotion:[^\s]+", "", user_text, flags=re.I).strip()
 
-        # 2) Адресат
-        print("\nКому адресовать ответ?")
+        # 2) Target
+        print("\nWho to address?")
         for i, t in enumerate(allowed_targets,  start=1):
             print(f"  {i}) {t}")
         try:
-            raw = input(f"Ваш выбор [1-{len(allowed_targets)}]: ").strip()
+            raw = input(f"Your choice [1-{len(allowed_targets)}]: ").strip()
             tgt_idx = int(raw) - 1
         except Exception:
             tgt_idx = 0
         target = allowed_targets[tgt_idx] if 0 <= tgt_idx < len(allowed_targets) else allowed_targets[0]
 
-        # 3) Тон/эмоция
+        # 3) Tone/emotion
         if "tone" not in tags or "emotion" not in tags:
             auto = self._classify(user_text)
             tone = tags.get("tone", auto["tone"])

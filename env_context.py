@@ -1,10 +1,10 @@
 from typing import List
 
-# ТРИ ПРОСТЫЕ ВЕРСИИ (формат строго "Окружение: Контекст")
+# Three simple versions (format strictly "Environment: Context")
 ENV_CONTEXTS: List[str] = [
-    "Университет: Обсуждение плана курсовой работы по ИИ",
-    "Стартап: Планирование MVP и приоритетов фич",
-    "Научный семинар: Разбор статьи и план экспериментов",
+    "University: Planning an AI coursework project",
+    "Startup: Prioritizing MVP features and roadmap",
+    "Research seminar: Reviewing a paper and planning experiments",
 ]
 
 def list_env_contexts() -> List[str]:
@@ -13,4 +13,4 @@ def list_env_contexts() -> List[str]:
 def get_env_context_by_index(i: int) -> str:
     if 0 <= i < len(ENV_CONTEXTS):
         return ENV_CONTEXTS[i]
-    return ENV_CONTEXTS[0]  # дефолт: первый
+    return ENV_CONTEXTS[0]  # default: first

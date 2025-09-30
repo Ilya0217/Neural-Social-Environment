@@ -11,7 +11,7 @@ LOG_DIR.mkdir(exist_ok=True)
 OUT_DIR.mkdir(exist_ok=True)
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")  # TODO: можно заменить в .env
+MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")  # Can be overridden via .env
 DEFAULT_ENV_CONTEXT_INDEX = int(os.getenv("ENV_CONTEXT_INDEX", "0"))  # 0..2
 
 TEMPERATURE = 0.7
@@ -22,27 +22,27 @@ VIZ_EDGE_WINDOW = 12         # последние N ходов для рёбер
 VIZ_TOP_EDGE_LABELS = 6      # подписывать не больше N самых сильных рёбер
 VIZ_SEED = 42                # фиксируем раскладку, чтобы "картинка не прыгала"
 
-# базовые агенты
+# default agents
 DEFAULT_AGENTS = [
     {
-        "name": "Исследователь",
+        "name": "Explorer",
         "nature": "explorer",
         "color": "#4F46E5",
     },
     {
-        "name": "Критик",
+        "name": "Critic",
         "nature": "critic",
         "color": "#DC2626",
     },
     {
-        "name": "Медиатор",
+        "name": "Mediator",
         "nature": "mediator",
         "color": "#059669",
     },
 ]
 
 USER_AGENT = {
-    "name": "Пользователь",
+    "name": "User",
     "nature": "human",
     "color": "#405686",
     "is_human": True,
