@@ -17,8 +17,8 @@ OUT_DIR = Path(os.getenv("AGENT_OUTPUT_DIR") or (RUNTIME_BASE / "outputs"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")  # Can be overridden via .env
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")  # Can be overridden via .env
 DEFAULT_ENV_CONTEXT_INDEX = int(os.getenv("ENV_CONTEXT_INDEX", "0"))  # 0..2
 AGENT_PROFILES_PATH = os.getenv("AGENT_PROFILES_PATH", "")
 

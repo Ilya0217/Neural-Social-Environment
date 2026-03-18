@@ -4,12 +4,12 @@ from typing import Any, Dict, List, Optional
 import sys
 
 from flask import Flask, jsonify, render_template, request, send_from_directory, send_file
-from openai import OpenAI
+import anthropic
 
 from .config import (
     LOG_DIR,
     OUT_DIR,
-    OPENAI_API_KEY,
+    ANTHROPIC_API_KEY,
     DEFAULT_ENV_CONTEXT_INDEX,
     VIZ_EDGE_WINDOW,
     VIZ_SEED,
@@ -41,7 +41,7 @@ app = Flask(
 
 class AppState:
     def __init__(self):
-        self.client: Optional[OpenAI] = None
+        self.client: Optional[anthropic.Anthropic] = None
         self.dm: Optional[DialogueManager] = None
         self.logger: Optional[IOLogger] = None
         self.agents_meta: Dict[str, Dict[str, str]] = {}
@@ -54,10 +54,10 @@ class AppState:
         self.previous_metrics: Optional[Dict[str, Any]] = None
 
     def reset(self, env_index: int, agents_config: Optional[List[Dict[str, Any]]] = None):
-        if not OPENAI_API_KEY:
-            raise RuntimeError("OPENAI_API_KEY is not set")
+        if not ANTHROPIC_API_KEY:
+            raise RuntimeError("ANTHROPIC_API_KEY is not set")
 
-        self.client = OpenAI()
+        self.client = anthropic.Anthropic()
 
         options = list_env_contexts()
         idx = env_index if 0 <= env_index < len(options) else DEFAULT_ENV_CONTEXT_INDEX

@@ -1,7 +1,7 @@
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
-from openai import OpenAI
+import anthropic
 from pydantic import ValidationError
 
 from .config import (
@@ -22,7 +22,7 @@ from .validators import ValidationPipeline, ValidationLevel
 
 @dataclass
 class DialogueManager:
-    client: OpenAI
+    client: anthropic.Anthropic
     agents: List[Any]  # list[Agent]
     env_context: str   # Выбранное "Окружение: Контекст"
     human_io: Optional[HumanIO] = None
@@ -190,158 +190,141 @@ class DialogueManager:
         ]
 
     def model_turn(self, messages, allowed_targets, agent=None):
-        import json, re, sys
+        import json, re, sys, time
         from pydantic import ValidationError
         
         def _fix_target(parsed, speaker_name=None):
-            # Проверяем самообращение (хотя это не должно происходить, т.к. speaker_name не в allowed_targets)
             if speaker_name and parsed.target == speaker_name:
                 parsed.target = allowed_targets[0] if allowed_targets else None
-            # если модель вернула неразрешённого адресата — подставим первого допустимого
             elif parsed.target not in allowed_targets:
                 parsed.target = allowed_targets[0] if allowed_targets else None
             return parsed
 
-        # Get current agent info for contextual fallback
         current_agent = agent
         if not current_agent and messages and messages[0].get("role") == "system":
-            # Extract agent name from system prompt or find from agents list
             for a in self.agents:
                 if a.system_prompt in messages[0].get("content", ""):
                     current_agent = a
                     break
 
-        # tools (function calling) with strict list of allowed targets
+        # Anthropic tool definition
         tools = [
             {
-                "type": "function",
-                "function": {
-                    "name": "submit_agent_turn",
-                    "description": "Strictly structured agent reply.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "reply": {"type": "string"},
-                            "tone": {"type": "string", "enum": ["positive", "neutral", "negative"]},
-                            "emotion": {"type": "string"},
-                            "target": {"type": "string", "enum": allowed_targets},
-                        },
-                        "required": ["reply", "tone", "emotion", "target"],
-                        "additionalProperties": False,
+                "name": "submit_agent_turn",
+                "description": "Strictly structured agent reply.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "reply": {"type": "string"},
+                        "tone": {"type": "string", "enum": ["positive", "neutral", "negative"]},
+                        "emotion": {"type": "string"},
+                        "target": {"type": "string", "enum": allowed_targets},
                     },
+                    "required": ["reply", "tone", "emotion", "target"],
                 },
             }
         ]
-        # Use "auto" to let model decide, but prefer function calling
-        tool_choice = "auto"
 
-        # Общая функция для выполнения API запросов с retry для rate limit
-        import time
-        from openai import RateLimitError
-        
         max_retries = 3
-        retry_delay = 20  # секунд для rate limit
-        
+        retry_delay = 20
+
         def make_api_call(call_func, description="API call"):
-            """Выполняет API вызов с retry логикой для rate limit"""
             for attempt in range(max_retries):
                 try:
                     return call_func()
-                except RateLimitError as e:
+                except anthropic.RateLimitError as e:
                     if attempt < max_retries - 1:
-                        wait_time = retry_delay * (attempt + 1)  # Увеличиваем задержку с каждой попыткой
+                        wait_time = retry_delay * (attempt + 1)
                         print(f"[Rate limit] {description}: Waiting {wait_time}s before retry (attempt {attempt + 1}/{max_retries})...", file=sys.stderr)
                         time.sleep(wait_time)
                     else:
-                        # Последняя попытка не удалась
                         print(f"[Rate limit] {description}: All {max_retries} retry attempts failed.", file=sys.stderr)
-                        raise  # Пробрасываем исключение дальше
-        
-        # A) chat.completions + tools (preferred method)
+                        raise
+
+        # Extract system prompt and user messages for Anthropic format
+        system_prompt = ""
+        user_messages = []
+        for msg in messages:
+            if msg["role"] == "system":
+                system_prompt = msg["content"]
+            else:
+                user_messages.append(msg)
+        if not user_messages:
+            user_messages = [{"role": "user", "content": "It's your turn to speak."}]
+
+        # A) Anthropic messages + tools (preferred)
         try:
             resp = make_api_call(
-                lambda: self.client.chat.completions.create(
+                lambda: self.client.messages.create(
                     model=MODEL,
-                    temperature=TEMPERATURE,
                     max_tokens=MAX_TOKENS,
-                    messages=messages,
+                    temperature=TEMPERATURE,
+                    system=system_prompt,
+                    messages=user_messages,
                     tools=tools,
-                    tool_choice=tool_choice,
+                    tool_choice={"type": "auto"},
                 ),
                 "Tools path API call"
             )
-            
-            choice = resp.choices[0]
-            
-            # First, try to get tool call
-            tool_calls = getattr(choice.message, "tool_calls", None) or []
-            if tool_calls:
-                try:
-                    args_str = tool_calls[0].function.arguments
-                    parsed = AgentTurn.model_validate_json(args_str)
-                    return _fix_target(parsed, agent.name if agent else None)
-                except (ValidationError, json.JSONDecodeError, KeyError, AttributeError) as e:
-                    print(f"[tool call parsing error] {e}", file=sys.stderr)
-                    if 'args_str' in locals():
-                        print(f"[tool call args] {args_str[:200]}", file=sys.stderr)
-                    else:
-                        print(f"[tool calls] {tool_calls}", file=sys.stderr)
-            
-            # If tool was not called, try parsing JSON from content
-            content = choice.message.content or ""
-            if content:
-                # Try to find JSON in content (improved regex for nested objects)
-                # First try to find complete JSON object
-                json_patterns = [
-                    r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}",  # Simple nested
-                    r"\{[^}]*\"reply\"[^}]*\"tone\"[^}]*\"emotion\"[^}]*\"target\"[^}]*\}",  # With required fields
-                ]
-                
-                for pattern in json_patterns:
-                    m = re.search(pattern, content, re.S | re.I)
-                    if m:
-                        try:
-                            parsed = AgentTurn.model_validate_json(m.group(0))
-                            return _fix_target(parsed, agent.name if agent else None)
-                        except (ValidationError, json.JSONDecodeError) as e:
-                            continue  # Try next pattern
-                
-                # If no valid JSON found, log and continue to next attempt
-                print(f"[no valid JSON in content] {content[:300]}", file=sys.stderr)
+
+            # Check for tool_use blocks
+            for block in resp.content:
+                if block.type == "tool_use" and block.name == "submit_agent_turn":
+                    try:
+                        parsed = AgentTurn.model_validate(block.input)
+                        return _fix_target(parsed, agent.name if agent else None)
+                    except (ValidationError, KeyError, AttributeError) as e:
+                        print(f"[tool call parsing error] {e}", file=sys.stderr)
+
+            # If no tool_use, try parsing JSON from text blocks
+            for block in resp.content:
+                if block.type == "text":
+                    content = block.text
+                    json_patterns = [
+                        r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}",
+                        r"\{[^}]*\"reply\"[^}]*\"tone\"[^}]*\"emotion\"[^}]*\"target\"[^}]*\}",
+                    ]
+                    for pattern in json_patterns:
+                        m = re.search(pattern, content, re.S | re.I)
+                        if m:
+                            try:
+                                parsed = AgentTurn.model_validate_json(m.group(0))
+                                return _fix_target(parsed, agent.name if agent else None)
+                            except (ValidationError, json.JSONDecodeError):
+                                continue
+                    print(f"[no valid JSON in content] {content[:300]}", file=sys.stderr)
         except Exception as e:
             print(f"[tools path error] {e}", file=sys.stderr)
             import traceback
             traceback.print_exc(file=sys.stderr)
 
         # B) Fallback: Direct JSON request without tools
-        # Create a simpler prompt that explicitly asks for JSON
-        json_request_messages = [
-            {"role": "system", "content": 
-                (current_agent.system_prompt if current_agent else "You are a helpful AI assistant.") +
-                f"\n\nEnvironment: {self.env_context}\n\n" +
-                "You must respond with a valid JSON object containing: reply (your message), tone (positive/neutral/negative), emotion (one word), and target (who you're addressing).\n" +
-                f"Available targets: {', '.join(allowed_targets) if allowed_targets else 'none'}\n" +
-                "Keep your reply natural, human-like, and short (1-2 sentences)."
-            },
-            {"role": "user", "content": 
-                "Recent conversation:\n" + 
-                ("\n".join(f"{h['speaker']}→{h.get('target', 'all')}: {h['reply']}" for h in self.history[-5:]) if self.history else "Starting conversation.") +
-                "\n\nGenerate your response as a JSON object with keys: reply, tone, emotion, target."
-            }
-        ]
+        fallback_system = (
+            (current_agent.system_prompt if current_agent else "You are a helpful AI assistant.") +
+            f"\n\nEnvironment: {self.env_context}\n\n" +
+            "You must respond with ONLY a valid JSON object containing: reply (your message), tone (positive/neutral/negative), emotion (one word), and target (who you're addressing).\n" +
+            f"Available targets: {', '.join(allowed_targets) if allowed_targets else 'none'}\n" +
+            "Keep your reply natural, human-like, and short (1-2 sentences)."
+        )
+        recent_lines = "\n".join(
+            f"{h['speaker']}→{h.get('target', 'all')}: {h['reply']}" for h in self.history[-5:]
+        ) if self.history else "Starting conversation."
+        fallback_user = (
+            f"Recent conversation:\n{recent_lines}"
+            "\n\nGenerate your response as a JSON object with keys: reply, tone, emotion, target."
+        )
         try:
             resp = make_api_call(
-                lambda: self.client.chat.completions.create(
+                lambda: self.client.messages.create(
                     model=MODEL,
-                    temperature=TEMPERATURE,
                     max_tokens=MAX_TOKENS,
-                    messages=json_request_messages,
-                    response_format={"type": "json_object"} if MODEL.startswith("gpt-4") or "o1" in MODEL else None,
+                    temperature=TEMPERATURE,
+                    system=fallback_system,
+                    messages=[{"role": "user", "content": fallback_user}],
                 ),
                 "JSON request path API call"
             )
-            raw = resp.choices[0].message.content or ""
-            # Try to extract JSON
+            raw = resp.content[0].text if resp.content else ""
             m = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", raw, re.S)
             raw_json = m.group(0) if m else raw.strip()
             if raw_json:
@@ -350,121 +333,63 @@ class DialogueManager:
                     return _fix_target(parsed, agent.name if agent else None)
                 except (ValidationError, json.JSONDecodeError) as e:
                     print(f"[json request path parsing error] {e}", file=sys.stderr)
-                    print(f"[raw response] {raw[:300]}", file=sys.stderr)
-            else:
-                print(f"[no JSON found in response] {raw[:300]}", file=sys.stderr)
         except Exception as e:
             print(f"[json request path error] {e}", file=sys.stderr)
             import traceback
             traceback.print_exc(file=sys.stderr)
 
-        # C) Final attempt: Generate natural response and extract structured data
-        # This is a last resort that still uses API to generate unique responses
+        # C) Final attempt
         try:
-            # Build a comprehensive prompt that includes full context
             recent_context = "\n".join(
-                f"{h['speaker']}→{h.get('target', 'all')}: {h['reply']}" 
+                f"{h['speaker']}→{h.get('target', 'all')}: {h['reply']}"
                 for h in self.history[-8:]
             ) if self.history else "Starting conversation."
-            
-            # Special instructions for University context
-            university_instructions = ""
-            if "University" in self.env_context or "university" in self.env_context.lower():
-                university_instructions = (
-                    "\n\nCRITICAL - SPEAK SIMPLY:\n"
-                    "- You're a regular person, NOT an academic - use SIMPLE, everyday words\n"
-                    "- Keep sentences SHORT and STRAIGHTFORWARD - no complex academic language\n"
-                    "- Sound like you're chatting with friends, not writing a paper\n"
-                    "- Use simple phrases: 'I think...', 'Maybe...', 'What if...', 'That sounds good'\n"
-                    "- NO fancy words, NO long complicated sentences\n"
-                    "- Keep it casual and simple - like normal people talk\n\n"
-                )
-            
-            # Create a detailed prompt that emphasizes real human conversation
-            final_prompt = [
-                {"role": "system", "content": 
-                    (current_agent.system_prompt if current_agent else "You are a real person in a real conversation.") +
-                    f"\n\nREAL SITUATION: {self.env_context}\n\n" +
-                    "This is a REAL conversation happening RIGHT NOW. You are a REAL PERSON, not an AI.\n"
-                    "React naturally, authentically, and spontaneously to what others have said.\n\n" +
-                    "CRITICAL: Always use INFORMAL 'you' (ты) when addressing others - this is a casual, friendly conversation.\n"
-                    "Never use formal language - speak naturally and informally, like real people do.\n" +
-                    university_instructions +
-                    "You MUST respond with a valid JSON object containing:\n" +
-                    "- reply: your natural, authentic response as a real person (1-2 sentences, be specific and real)\n"
-                    "  Use informal 'you' (ты): 'What do you think?', 'You're right about that', 'How would you approach this?'\n" +
-                    "- tone: positive, neutral, or negative (based on how you genuinely feel)\n" +
-                    "- emotion: one English word describing your genuine emotion (curious, concerned, excited, thoughtful, etc.)\n" +
-                    f"- target: one of {allowed_targets if allowed_targets else ['all']} (who you're naturally addressing)\n\n" +
-                    "Make your reply feel like a real person speaking:\n"
-                    "- Reference what people actually said\n"
-                    "- Show you're listening and thinking\n"
-                    "- React authentically (excitement, concern, curiosity, agreement, etc.)\n"
-                    "- Use natural speech patterns and contractions\n"
-                    "- Always use informal 'you' (ты) - never formal language\n"
-                    + ("- Keep it SIMPLE - everyday words, short sentences, casual talk\n" if university_instructions else "")
-                    + "- Sound spontaneous, not scripted"
-                },
-                {"role": "user", "content": 
-                    f"What's been said in this real conversation:\n{recent_context}\n\n" +
-                    f"It's your turn to speak. You're a real person reacting naturally. "
-                    f"Address: {allowed_targets[0] if allowed_targets else 'everyone'}\n\n" +
-                    "IMPORTANT: Always use INFORMAL 'you' (ты) when addressing others - never formal language.\n"
-                    "This is a casual, friendly conversation. Speak naturally and informally.\n\n"
-                    "Respond authentically as a JSON object. Be yourself - natural, real, human, and INFORMAL."
-                }
-            ]
-            
+
+            final_system = (
+                (current_agent.system_prompt if current_agent else "You are a real person in a real conversation.") +
+                f"\n\nREAL SITUATION: {self.env_context}\n\n" +
+                "You MUST respond with ONLY a valid JSON object containing:\n"
+                "- reply: your natural response (1-2 sentences)\n"
+                "- tone: positive, neutral, or negative\n"
+                "- emotion: one English word\n"
+                f"- target: one of {allowed_targets if allowed_targets else ['all']}\n"
+            )
             resp = make_api_call(
-                lambda: self.client.chat.completions.create(
+                lambda: self.client.messages.create(
                     model=MODEL,
-                    temperature=TEMPERATURE,
                     max_tokens=MAX_TOKENS,
-                    messages=final_prompt,
+                    temperature=TEMPERATURE,
+                    system=final_system,
+                    messages=[{"role": "user", "content":
+                        f"Conversation so far:\n{recent_context}\n\nYour turn. Respond as JSON only."}],
                 ),
                 "Final attempt API call"
             )
-            
-            raw = resp.choices[0].message.content or ""
-            
-            # Try to extract JSON from response
+            raw = resp.content[0].text if resp.content else ""
             m = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", raw, re.S)
             raw_json = m.group(0) if m else raw.strip()
-            
             if raw_json:
                 try:
                     parsed = AgentTurn.model_validate_json(raw_json)
                     return _fix_target(parsed, agent.name if agent else None)
-                except (ValidationError, json.JSONDecodeError) as e:
-                    print(f"[final attempt JSON parsing error] {e}", file=sys.stderr)
-                    print(f"[raw response] {raw[:500]}", file=sys.stderr)
-            
-            # If we can't parse JSON, try to extract just the reply text and construct response
-            # This is still better than hardcoded fallback
-            if raw and not raw_json:
-                # Try to find a natural response in the text
+                except (ValidationError, json.JSONDecodeError):
+                    pass
+
+            if raw:
                 lines = raw.split('\n')
                 reply_text = lines[0].strip() if lines else raw[:200].strip()
-                if not reply_text:
-                    reply_text = "I'm processing what was said."
-                
                 return AgentTurn(
-                    reply=reply_text,
+                    reply=reply_text or "I'm processing what was said.",
                     tone="neutral",
                     emotion="neutral",
                     target=allowed_targets[0] if allowed_targets else None,
                 )
         except Exception as final_error:
             print(f"[final attempt error] {final_error}", file=sys.stderr)
-            import traceback
-            traceback.print_exc(file=sys.stderr)
-            
-            # If all API attempts failed, raise an error instead of using hardcoded responses
             raise RuntimeError(
                 f"Failed to generate agent response via API after multiple attempts. "
                 f"Last error: {str(final_error)}. "
-                f"Please check your OpenAI API key and network connection. "
-                f"If you're getting 'unsupported_country_region_territory' error, you may need to use a VPN or proxy."
+                f"Please check your ANTHROPIC_API_KEY and network connection."
             ) from final_error
 
     # 3) Simulation step — pass allowed_targets to model_turn and give word to addressee

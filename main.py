@@ -1,6 +1,6 @@
-from openai import OpenAI
+import anthropic
 from pathlib import Path
-from .config import LOG_DIR, OUT_DIR, OPENAI_API_KEY, DEFAULT_ENV_CONTEXT_INDEX, USER_AGENT
+from .config import LOG_DIR, OUT_DIR, ANTHROPIC_API_KEY, DEFAULT_ENV_CONTEXT_INDEX, USER_AGENT
 from .config import VIZ_EDGE_WINDOW, VIZ_TOP_EDGE_LABELS, VIZ_SEED
 from .visualize import draw_interactions_pro
 from .agents import Agent
@@ -12,10 +12,10 @@ from .analytics import compute_metrics, hypotheses_from_metrics, render_markdown
 from .profiles import initialize_agents
 
 def main():
-    if not OPENAI_API_KEY:
-        raise RuntimeError("OPENAI_API_KEY is not set")
+    if not ANTHROPIC_API_KEY:
+        raise RuntimeError("ANTHROPIC_API_KEY is not set")
 
-    client = OpenAI()  # SDK возьмёт ключ из окружения. 
+    client = anthropic.Anthropic()  # SDK возьмёт ключ из окружения.
 
     # === Environment selection ===
     options = list_env_contexts()
