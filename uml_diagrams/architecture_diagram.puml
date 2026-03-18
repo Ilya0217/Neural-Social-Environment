@@ -1,0 +1,67 @@
+@startuml ArchitectureDiagram
+' Тип диаграммы: Архитектурная диаграмма системы (Component Diagram)
+!theme plain
+skinparam defaultFontSize 22
+skinparam componentFontSize 20
+skinparam packageFontSize 24
+skinparam noteFontSize 18
+skinparam shadowing false
+skinparam roundcorner 10
+skinparam linetype ortho
+
+title Архитектура системы симуляции многоагентных диалогов
+
+package "Интерфейсы" {
+    component [Web UI] as WebUI
+    component [CLI] as CLI
+}
+
+package "Ядро системы" {
+    component [Dialogue Manager] as DM
+    component [Prompt Engine] as PE
+}
+
+package "Валидация" {
+    component [Validation] as VP
+}
+
+package "Аналитика" {
+    component [Metrics] as MC
+    component [Scientific Analysis] as SA
+}
+
+package "Визуализация" {
+    component [Graph] as GV
+}
+
+package "Данные" {
+    component [Logger] as DL
+    component [Export] as EM
+}
+
+component [LLM API] as LLM
+
+' Связи
+WebUI --> DM
+CLI --> DM
+DM --> PE
+DM --> VP
+DM --> MC
+DM --> SA
+DM --> GV
+DM --> DL
+PE --> LLM
+DL --> EM
+
+note right of DM
+    **Центральный оркестратор**
+    Управление диалогом
+end note
+
+note right of LLM
+    **OpenAI / DeepSeek**
+    Генерация ответов
+end note
+
+@enduml
+

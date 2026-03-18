@@ -1,0 +1,48 @@
+@startuml AgentDialogueSim
+!theme plain
+skinparam classAttributeIconSize 0
+skinparam linetype ortho
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam roundcorner 5
+skinparam defaultFontSize 16
+skinparam classFontSize 16
+skinparam packageFontSize 18
+skinparam noteFontSize 14
+
+title Архитектура системы симуляции многоагентных диалогов
+
+package "Ядро системы" {
+    class Agent
+    class DialogueManager
+    class AgentTurn
+}
+
+package "Валидация" {
+    class ValidationPipeline
+    class BaseValidator
+}
+
+package "Аналитика" {
+    class MetricsCalculator
+    class ScientificAnalyzer
+}
+
+package "Интерфейсы" {
+    class WebApp
+    class IOLogger
+}
+
+' Основные связи
+DialogueManager *-- Agent
+DialogueManager --> AgentTurn
+DialogueManager --> ValidationPipeline
+ValidationPipeline *-- BaseValidator
+DialogueManager ..> MetricsCalculator
+DialogueManager ..> ScientificAnalyzer
+DialogueManager ..> IOLogger
+
+WebApp --> DialogueManager
+WebApp --> IOLogger
+
+@enduml

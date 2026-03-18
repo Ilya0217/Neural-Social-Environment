@@ -1,6 +1,6 @@
 from openai import OpenAI
 from pathlib import Path
-from .config import LOG_DIR, OUT_DIR, DEFAULT_AGENTS, OPENAI_API_KEY, DEFAULT_ENV_CONTEXT_INDEX, USER_AGENT
+from .config import LOG_DIR, OUT_DIR, OPENAI_API_KEY, DEFAULT_ENV_CONTEXT_INDEX, USER_AGENT
 from .config import VIZ_EDGE_WINDOW, VIZ_TOP_EDGE_LABELS, VIZ_SEED
 from .visualize import draw_interactions_pro
 from .agents import Agent
@@ -9,6 +9,7 @@ from .io_logger import IOLogger
 from .env_context import list_env_contexts, get_env_context_by_index
 from .human_io import HumanIO
 from .analytics import compute_metrics, hypotheses_from_metrics, render_markdown_report, save_report_md
+from .profiles import initialize_agents
 
 def main():
     if not OPENAI_API_KEY:
@@ -29,7 +30,7 @@ def main():
     env_context = get_env_context_by_index(idx)
     print(f"\nSelected: {env_context}\n")
     
-    agents = [Agent(**a) for a in DEFAULT_AGENTS]
+    agents = initialize_agents(interactive=True)
     agents.append(Agent(**USER_AGENT))
 
     # 2) инициализируем диалог-менеджер с HumanIO

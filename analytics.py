@@ -1,7 +1,16 @@
 """Analytics for agent dialogue.
 
 Computes windowed and global metrics, renders markdown reports, and generates
-lightweight heuristic hypotheses in English.
+hypotheses based on both heuristic and modern scientific frameworks (1990-2025).
+
+Scientific foundations integrated from scientific_analytics.py:
+- Social Network Analysis (Borgatti et al., 2009; Barabási & Albert, 1999)
+- Social Capital & Structural Holes (Burt, 2004; Gittell, 2002)
+- ISO 24617-2 Dialogue Act Taxonomy (Bunt et al., 2017)
+- Computational Pragmatics (Clark, 1996; Jurafsky & Martin, 2023)
+- Computer-Mediated Discourse Analysis (Herring, 2004; Androutsopoulos, 2006)
+- Dimensional Emotion Model (Russell & Barrett, 1999; Mohammad & Turney, 2013)
+- Integrated Model of Group Development (Wheelan, 2009; Kozlowski & Ilgen, 2006)
 """
 from __future__ import annotations
 from pathlib import Path
@@ -10,8 +19,21 @@ import math
 from collections import Counter, defaultdict
 from datetime import datetime
 
+from .scientific_analytics import (
+    compute_scientific_analysis,
+    generate_scientific_hypotheses,
+    render_scientific_report,
+    ScientificAnalysisResult,
+)
+from typing import Optional
+from .hypothesis_validator import HypothesisValidator, HypothesisValidation
+
 # tone palette
 TONE_SCORE = {"positive": 1.0, "neutral": 0.0, "negative": -1.0}
+ACTION_KEYWORDS = [
+    "plan", "schedule", "deliver", "ship", "prototype", "test",
+    "next step", "deadline", "assign", "owner", "task", "todo",
+]
 
 def _window(history: List[Dict[str, Any]], n: int) -> List[Dict[str, Any]]:
     return history[-n:] if n > 0 else history[:]
@@ -75,6 +97,17 @@ def compute_metrics(history: List[Dict[str, Any]], agents: List[str], window_siz
         out_deg = Counter([ s for (s, _) in targets ])
         in_deg  = Counter([ t for (_, t) in targets ])
         reciprocity = _estimate_reciprocity(sub)
+        question_ratio = sum(1 for r in sub if "?" in (r.get("reply") or "")) / max(1, len(sub))
+        lower_agents = [a.lower() for a in agents]
+        reference_hits = 0
+        action_hits = 0
+        for r in sub:
+            reply = (r.get("reply") or "").lower()
+            speaker_lower = (r.get("speaker") or "").lower()
+            if any(name != speaker_lower and name in reply for name in lower_agents):
+                reference_hits += 1
+            if any(keyword in reply for keyword in ACTION_KEYWORDS):
+                action_hits += 1
         return {
             "messages": len(sub),
             "talk_share": {a: talk.get(a, 0)/max(1, len(sub)) for a in agents},
@@ -88,6 +121,9 @@ def compute_metrics(history: List[Dict[str, Any]], agents: List[str], window_siz
             "in_degree": dict(in_deg),
             "reciprocity": reciprocity,
             "avg_addressing_delay": _addressing_delay(sub),
+            "question_rate": question_ratio,
+            "reference_rate": reference_hits / max(1, len(sub)),
+            "actionability_rate": action_hits / max(1, len(sub)),
         }
 
     def _per_agent(sub: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -106,11 +142,15 @@ def compute_metrics(history: List[Dict[str, Any]], agents: List[str], window_siz
     summary_all = _aggregate(history)
     summary_win = _aggregate(win)
     per_agent_win = _per_agent(win)
+    
+    # Compute scientific analysis
+    scientific = compute_scientific_analysis(history, agents, window_size)
 
     return {
         "window_size": window_size,
         "summary": {"all": summary_all, "window": summary_win},
         "per_agent": per_agent_win,
+        "scientific": scientific,
     }
 
 def _estimate_reciprocity(sub: List[Dict[str, Any]]) -> float:
@@ -125,39 +165,68 @@ def _estimate_reciprocity(sub: List[Dict[str, Any]]) -> float:
     return mutual / max(1, len(set_pairs))
 
 def hypotheses_from_metrics(metrics: Dict[str, Any], user_name: str | None = "User") -> List[str]:
-    """Simple heuristic hypotheses generator (can be replaced with LLM)."""
+    """
+    Generate hypotheses combining heuristic rules and scientific frameworks.
+    
+    Returns list of hypothesis strings for display.
+    """
     s = metrics["summary"]["window"]
     hyp = []
+    
+    # === HEURISTIC HYPOTHESES ===
     # dominance
     talk = s["talk_share"]
     top_speaker, top_share = max(talk.items(), key=lambda kv: kv[1]) if talk else ("-", 0)
     if top_share > 0.45:
-        hyp.append(f"Hypothesis: agent '{top_speaker}' dominates the discussion (~{int(top_share*100)}%). Check role balance.")
+        hyp.append(f"⚠️ Agent '{top_speaker}' dominates (~{int(top_share*100)}%) — check role balance")
     # mood / tone
     if s["avg_tone"] < -0.25:
-        hyp.append("Hypothesis: average tone is negative — risk of conflict; consider facilitation.")
+        hyp.append("⚠️ Negative tone detected — risk of conflict")
     elif s["avg_tone"] > 0.35:
-        hyp.append("Hypothesis: positive bias — good cooperation; you can accelerate decisions.")
+        hyp.append("✅ Positive atmosphere — good for decisions")
     # addressing
     if s["targeting_rate"] < 0.7:
-        hyp.append("Hypothesis: low addressing (<70%) — possible misunderstandings; enforce 'each message is addressed'.")
+        hyp.append("⚠️ Low addressing (<70%) — possible miscommunication")
     # delays
     if s["avg_addressing_delay"] > 2.5:
-        hyp.append("Hypothesis: high average response delay (>2.5 turns) — redistribute focus.")
-    # emotion diversity
-    if s["emotion_entropy"] > 1.3:
-        hyp.append("Hypothesis: emotions are highly mixed — discussion may be fragmented.")
+        hyp.append("⚠️ High response delay (>2.5 turns)")
+    # questions
+    if s.get("question_rate", 0) < 0.15:
+        hyp.append("💡 Few questions (<15%) — encourage exploration")
     # attention to user
     if user_name and s["in_degree"].get(user_name, 0) == 0:
-        hyp.append("Hypothesis: the user hasn't been addressed — explicitly ask for their input.")
+        hyp.append(f"💡 '{user_name}' hasn't been addressed")
+    
+    # === SCIENTIFIC HYPOTHESES ===
+    scientific = metrics.get("scientific")
+    if scientific:
+        sci_hyps = generate_scientific_hypotheses(scientific, list(talk.keys()))
+        for sh in sci_hyps[:3]:  # Top 3 scientific hypotheses
+            finding = sh.get("finding", "")
+            framework = sh.get("framework", "")
+            if finding:
+                hyp.append(f"📚 [{framework}] {finding}")
 
-    return hyp or ["Hypotheses: no significant deviations — communication is stable."]
+    return hyp or ["✅ Communication is stable — no significant deviations"]
+
+
+def get_scientific_hypotheses_full(metrics: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Get full scientific hypotheses with references for detailed display.
+    """
+    scientific = metrics.get("scientific")
+    if not scientific:
+        return []
+    
+    agents = list(metrics["summary"]["window"]["talk_share"].keys())
+    return generate_scientific_hypotheses(scientific, agents)
 
 def render_markdown_report(metrics: Dict[str, Any], turn: int, title: str) -> str:
     s_all = metrics["summary"]["all"]
     s_win = metrics["summary"]["window"]
     pa = metrics["per_agent"]
-    ts = datetime.utcnow().isoformat()
+    scientific = metrics.get("scientific")
+    ts = datetime.utcnow().strftime("%H:%M:%S UTC")
 
     def pct(x): return f"{x*100:.0f}%"
     def tone_emoji(x):
@@ -165,9 +234,11 @@ def render_markdown_report(metrics: Dict[str, Any], turn: int, title: str) -> st
 
     # top block
     md = []
-    md.append(f"# 📈 Dialogue Metrics — turn {turn} ({ts} UTC)")
+    md.append(f"# 📈 Dialogue Metrics — turn {turn} ({ts})")
     md.append("")
-    md.append("**Window**: last {win} messages · **Total**: {all_} messages".format(win=s_win["messages"], all_=s_all["messages"]))
+    md.append("| Window messages | Total messages |")
+    md.append("|---:|---:|")
+    md.append("| {win} | {all_} |".format(win=s_win["messages"], all_=s_all["messages"]))
     md.append("")
     md.append("| Metric | Window | Total |")
     md.append("|---|---:|---:|")
@@ -177,16 +248,87 @@ def render_markdown_report(metrics: Dict[str, Any], turn: int, title: str) -> st
     md.append(f"| Avg reply words | {s_win['avg_reply_words']:.1f} | {s_all['avg_reply_words']:.1f} |")
     md.append(f"| Reciprocity | {s_win['reciprocity']:.2f} | {s_all['reciprocity']:.2f} |")
     md.append(f"| Response delay (turns) | {s_win['avg_addressing_delay']:.2f} | {s_all['avg_addressing_delay']:.2f} |")
+    md.append(f"| Questions, % | {pct(s_win.get('question_rate', 0))} | {pct(s_all.get('question_rate', 0))} |")
+    md.append(f"| Named references, % | {pct(s_win.get('reference_rate', 0))} | {pct(s_all.get('reference_rate', 0))} |")
+    md.append(f"| Actionable cues, % | {pct(s_win.get('actionability_rate', 0))} | {pct(s_all.get('actionability_rate', 0))} |")
     md.append("")
+    
+    # === SCIENTIFIC ANALYSIS SECTION (Modern Frameworks 1990-2025) ===
+    if scientific:
+        md.append("---")
+        md.append("## 🔬 Scientific Analysis")
+        md.append("")
+        
+        # Group Development Stage (Wheelan, 2009)
+        stage_data = scientific.group_stage
+        if stage_data:
+            stage = stage_data.get("stage", "unknown").upper()
+            confidence = stage_data.get("confidence", 0)
+            md.append(f"### Group Stage (Wheelan, 2009): **{stage}** ({pct(confidence)} confidence)")
+            md.append("")
+        
+        # Network Analysis (Borgatti et al., 2009)
+        md.append("### Network Analysis (Borgatti et al., 2009)")
+        md.append(f"- **Network Density:** {pct(scientific.network_density)}")
+        md.append(f"- **Clustering:** {scientific.clustering_coefficient:.2f}")
+        md.append("")
+        
+        # Social Capital (Burt, 2004)
+        social_cap = scientific.social_capital
+        if social_cap:
+            md.append(f"### Relational Coordination (Gittell, 2002): {pct(social_cap.get('group_cohesion', 0))}")
+            md.append("")
+        
+        # Dialogue Act Profile (ISO 24617-2, Bunt et al., 2017)
+        dialogue_acts = scientific.dialogue_act_profile
+        if dialogue_acts:
+            md.append("### Dialogue Acts (ISO 24617-2, Bunt et al., 2017)")
+            md.append(f"- **Task-oriented:** {pct(dialogue_acts.get('task_ratio', 0))}")
+            md.append(f"- **Socio-emotional:** {pct(dialogue_acts.get('socio_ratio', 0))}")
+            md.append(f"- **Positive/Negative ratio:** {dialogue_acts.get('positive_negative_ratio', 0):.2f}")
+            md.append("")
+        
+        # Emotional Climate (Russell & Barrett, 1999)
+        md.append(f"### Emotional Climate (Russell & Barrett, 1999): **{scientific.dominant_emotion.title()}**")
+        emotions = scientific.emotion_distribution
+        if emotions:
+            top_emotions = sorted(emotions.items(), key=lambda x: -x[1])[:3]
+            emotions_str = ", ".join(f"{e}: {pct(v)}" for e, v in top_emotions if v > 0)
+            if emotions_str:
+                md.append(f"Top emotions: {emotions_str}")
+        md.append("")
+        
+        # Turn-Taking (Herring, 2004)
+        turn_data = scientific.turn_taking
+        if turn_data:
+            md.append("### Turn-Taking (CMDA, Herring, 2004)")
+            md.append(f"- **Inequality (Gini):** {turn_data.get('turn_inequality_gini', 0):.2f}")
+            md.append(f"- **Adjacency completion:** {pct(turn_data.get('adjacency_completion_rate', 0))}")
+            md.append("")
+    
+    md.append("---")
+    
     # per-agent stats
-    md.append("## Per agent (window)")
+    md.append("## Per agent")
     md.append("| Agent | Msgs | Avg words | Avg tone | Last emotion | Target diversity |")
     md.append("|---|---:|---:|---:|---|---:|")
     for a, st in sorted(pa.items(), key=lambda kv: kv[1]["msgs"], reverse=True):
         md.append(f"| {a} | {st['msgs']} | {st['avg_words']:.1f} | {st['avg_tone']:+.2f} | {st['last_emotion']} | {st['targets_diversity']} |")
     md.append("")
+    
+    # Centrality (if available)
+    if scientific and scientific.centrality:
+        md.append("## Centrality Analysis")
+        md.append("| Agent | In-Centrality | Out-Centrality | Betweenness |")
+        md.append("|---|---:|---:|---:|")
+        for a in sorted(scientific.centrality.keys()):
+            c = scientific.centrality[a]
+            b = scientific.betweenness.get(a, 0)
+            md.append(f"| {a} | {pct(c.get('in_centrality', 0))} | {pct(c.get('out_centrality', 0))} | {pct(b)} |")
+        md.append("")
+    
     # speaking shares (as table)
-    md.append("## Speaking shares (window)")
+    md.append("## Speaking shares")
     tt = s_win["talk_share"]
     md.append("| Agent | Share |")
     md.append("|---|---:|")
@@ -198,3 +340,69 @@ def render_markdown_report(metrics: Dict[str, Any], turn: int, title: str) -> st
 def save_report_md(md_text: str, out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(md_text, encoding="utf-8")
+
+
+# ========== HYPOTHESIS VALIDATION ==========
+
+try:
+    from .hypothesis_validator import HypothesisValidator, HypothesisValidation
+    
+    # Глобальный валидатор гипотез
+    _hypothesis_validator = HypothesisValidator()
+    
+    def validate_hypotheses(
+        hypotheses: List[Dict[str, Any]],
+        current_metrics: Dict[str, Any],
+        previous_metrics: Optional[Dict[str, Any]] = None,
+        history: Optional[List[Dict[str, Any]]] = None
+    ) -> List[HypothesisValidation]:
+        """
+        Проверить гипотезы на основе метрик.
+        
+        Args:
+            hypotheses: Список гипотез из generate_scientific_hypotheses
+            current_metrics: Текущие метрики
+            previous_metrics: Предыдущие метрики для сравнения
+            history: История диалога для извлечения примеров
+        
+        Returns:
+            Список результатов проверки
+        """
+        _hypothesis_validator.add_metrics_snapshot(
+            len(_hypothesis_validator.metrics_history),
+            current_metrics
+        )
+        return _hypothesis_validator.validate_all_hypotheses(
+            hypotheses, current_metrics, previous_metrics, history
+        )
+    
+    def get_hypothesis_validation_report(
+        hypotheses: List[Dict[str, Any]],
+        metrics: Dict[str, Any],
+        previous_metrics: Optional[Dict[str, Any]] = None,
+        turn: int = 0,
+        history: Optional[List[Dict[str, Any]]] = None
+    ) -> str:
+        """
+        Получить отчёт о проверке гипотез.
+        
+        Args:
+            hypotheses: Список гипотез
+            metrics: Текущие метрики
+            previous_metrics: Предыдущие метрики
+            turn: Номер хода
+            history: История диалога для извлечения примеров
+        
+        Returns:
+            Markdown отчёт
+        """
+        validations = validate_hypotheses(hypotheses, metrics, previous_metrics, history)
+        return _hypothesis_validator.render_validation_report(validations, turn)
+    
+except ImportError:
+    # Если модуль hypothesis_validator не найден, создаём заглушки
+    def validate_hypotheses(*args, **kwargs):
+        return []
+    
+    def get_hypothesis_validation_report(*args, **kwargs):
+        return "# Проверка гипотез\n\nМодуль проверки гипотез недоступен."

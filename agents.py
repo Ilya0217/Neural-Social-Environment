@@ -1,6 +1,5 @@
 from dataclasses import dataclass
-from typing import Dict
-from .prompts import SYSTEM_PROMPTS
+from .prompts import build_system_prompt
 
 @dataclass
 class Agent:
@@ -8,7 +7,8 @@ class Agent:
     nature: str
     color: str
     is_human: bool = False
+    persona: str = ""
 
     @property
     def system_prompt(self) -> str:
-        return SYSTEM_PROMPTS.get(self.nature, "You are a helpful AI assistant.")
+        return build_system_prompt(self.nature, self.persona)
