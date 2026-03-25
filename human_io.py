@@ -29,14 +29,13 @@ class HumanIO:
             {"role": "user", "content": text.strip()},
         ]
         try:
-            resp = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
+            resp = self.client.chat.completions.create(
+                model="gpt-4o-mini",
                 temperature=0.0,
-                max_tokens=50,
-                system=prompt[0]["content"],
-                messages=[{"role": "user", "content": prompt[1]["content"]}],
+                max_tokens=20,
+                messages=prompt,
             )
-            raw = (resp.content[0].text if resp.content else "").strip()
+            raw = (resp.choices[0].message.content or "").strip()
             m = re.search(r"\{.*\}", raw, re.S)
             return eval(m.group(0)) if m else {"tone": "neutral", "emotion": "neutral"}
         except Exception:
