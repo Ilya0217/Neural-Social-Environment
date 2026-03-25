@@ -151,36 +151,58 @@ Respond with ONLY a valid JSON object."""
 
         report = ObservationReport(turn=turn_no)
 
-        try:
-            resp = self.client.chat.completions.create(
-                model=self.model or MODEL,
-                temperature=max(0.3, TEMPERATURE - 0.3),  # lower temp for analysis
-                max_tokens=MAX_TOKENS + 400,  # need more tokens for analysis
-                messages=[
-                    {"role": "system", "content": prompt},
-                    {"role": "user", "content": "Analyze the dialogue and produce your observation report as JSON."},
-                ],
-            )
-            raw = resp.choices[0].message.content or ""
-            report.raw_llm_response = raw
+        import sys
+        import time
+        from openai import RateLimitError
 
-            # Parse JSON from response
-            m = re.search(r"\{.*\}", raw, re.S)
-            if m:
-                data = json.loads(m.group(0))
-                report.group_dynamics = data.get("group_dynamics", "")
-                report.leadership_pattern = data.get("leadership_pattern", "")
-                report.coalition_analysis = data.get("coalition_analysis", "")
-                report.communication_barriers = data.get("communication_barriers", "")
-                report.emotional_undercurrent = data.get("emotional_undercurrent", "")
-                report.agreements = data.get("agreements", [])
-                report.divergences = data.get("divergences", [])
-                report.novel_insights = data.get("novel_insights", [])
-                report.convergence_score = float(data.get("convergence_score", 0.0))
-        except Exception as e:
-            import sys
-            print(f"[ObserverAgent] Error: {e}", file=sys.stderr)
-            report.group_dynamics = f"Observation failed: {str(e)}"
+        max_retries = 3
+        retry_delay = 3  # seconds
+
+        raw = ""
+        for attempt in range(max_retries):
+            try:
+                resp = self.client.chat.completions.create(
+                    model=self.model or MODEL,
+                    temperature=max(0.3, TEMPERATURE - 0.3),  # lower temp for analysis
+                    max_tokens=MAX_TOKENS + 400,  # need more tokens for analysis
+                    messages=[
+                        {"role": "system", "content": prompt},
+                        {"role": "user", "content": "Analyze the dialogue and produce your observation report as JSON."},
+                    ],
+                )
+                raw = resp.choices[0].message.content or ""
+                break  # success
+            except RateLimitError as e:
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (attempt + 1)
+                    print(f"[ObserverAgent] Rate limit, waiting {wait_time}s (attempt {attempt + 1}/{max_retries})...", file=sys.stderr)
+                    time.sleep(wait_time)
+                else:
+                    print(f"[ObserverAgent] Rate limit: all {max_retries} retries failed.", file=sys.stderr)
+                    report.group_dynamics = "Observation failed: rate limit exceeded after retries"
+            except Exception as e:
+                print(f"[ObserverAgent] Error: {e}", file=sys.stderr)
+                report.group_dynamics = f"Observation failed: {str(e)}"
+                break  # non-retryable error
+
+        if raw:
+            try:
+                report.raw_llm_response = raw
+                m = re.search(r"\{.*\}", raw, re.S)
+                if m:
+                    data = json.loads(m.group(0))
+                    report.group_dynamics = data.get("group_dynamics", "")
+                    report.leadership_pattern = data.get("leadership_pattern", "")
+                    report.coalition_analysis = data.get("coalition_analysis", "")
+                    report.communication_barriers = data.get("communication_barriers", "")
+                    report.emotional_undercurrent = data.get("emotional_undercurrent", "")
+                    report.agreements = data.get("agreements", [])
+                    report.divergences = data.get("divergences", [])
+                    report.novel_insights = data.get("novel_insights", [])
+                    report.convergence_score = float(data.get("convergence_score", 0.0))
+            except Exception as e:
+                print(f"[ObserverAgent] JSON parsing error: {e}", file=sys.stderr)
+                report.group_dynamics = f"Observation parsing failed: {str(e)}"
 
         self.history.append(report)
         return report

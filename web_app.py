@@ -57,8 +57,9 @@ class AppState:
         self.previous_metrics: Optional[Dict[str, Any]] = None
         self.observer: Optional[ObserverAgent] = None
         self.last_observer_report: str = ""
+        self.user_participating: bool = False
 
-    def reset(self, env_index: int, agents_config: Optional[List[Dict[str, Any]]] = None):
+    def reset(self, env_index: int, agents_config: Optional[List[Dict[str, Any]]] = None, join_as_participant: bool = False):
         if not OPENAI_API_KEY:
             raise RuntimeError("OPENAI_API_KEY is not set")
 
@@ -98,8 +99,20 @@ class AppState:
             agents = initialize_agents_from_config(agents_config, client=self.client)
         else:
             agents = initialize_agents(interactive=False)
-        
-        # В web-версии опускаем живого пользователя, чтобы не блокировать UI
+
+        # Добавляем пользователя как участника если запрошено
+        self.user_participating = join_as_participant
+        if join_as_participant:
+            from .config import USER_AGENT
+            user_agent = Agent(
+                name=USER_AGENT["name"],
+                nature=USER_AGENT["nature"],
+                color=USER_AGENT["color"],
+                is_human=True,
+            )
+            agents.insert(0, user_agent)
+
+        # В web-версии human_io=None — пользователь пишет через /api/user_message
         self.dm = DialogueManager(client=self.client, agents=agents, env_context=self.env_context, human_io=None)
         # Initialize observer agent for methodological triangulation
         self.observer = ObserverAgent(client=self.client)
@@ -125,6 +138,7 @@ class AppState:
                 "nature": a.nature,
                 "big_five": a.big_five.to_dict() if a.big_five else None,
                 "is_observer": False,
+                "is_human": getattr(a, "is_human", False),
             }
             for a in agents
         }
@@ -137,6 +151,66 @@ class AppState:
         }
         self.last_metrics = None
         self.last_hyps = []
+
+    def compute_metrics_if_needed(self, record: Dict[str, Any]):
+        """Compute graphs, metrics, hypotheses if should_plot(). Returns (image_url, metrics_md, hyps)."""
+        image_url = None
+        metrics_md = None
+        hyps: List[str] = []
+
+        if self.dm and self.dm.should_plot():
+            out_path = OUT_DIR / f"graph_turn_{record['turn']:04d}.png"
+            draw_interactions_pro(
+                agents_meta=self.agents_meta,
+                history=list(self.dm.history),
+                out_path=out_path,
+                title=f"Interactions and tones (before move {record['turn']})",
+                window=VIZ_EDGE_WINDOW,
+                seed=VIZ_SEED,
+                top_edge_labels=0,
+                per_message_edges=True,
+            )
+            image_url = f"/outputs/{out_path.name}"
+
+            agents_order = list(self.agents_meta.keys())
+            metrics = compute_metrics(self.dm.history, agents_order, window_size=VIZ_EDGE_WINDOW)
+            hyps = hypotheses_from_metrics(metrics, user_name=None)
+            metrics_md = render_markdown_report(metrics, turn=record["turn"], title="Dialogue — metrics")
+            metrics_path = OUT_DIR / f"metrics_turn_{record['turn']:04d}.md"
+            save_report_md(metrics_md, metrics_path)
+
+            # Generate scientific report
+            scientific = metrics.get("scientific")
+            if scientific:
+                sci_hyps = generate_scientific_hypotheses(scientific, agents_order)
+                sci_report = render_scientific_report(scientific, sci_hyps, record["turn"])
+                sci_report_path = OUT_DIR / f"scientific_turn_{record['turn']:04d}.md"
+                save_report_md(sci_report, sci_report_path)
+                self.last_scientific_hyps = sci_hyps
+                self.last_scientific_report = sci_report
+
+                # Validate hypotheses
+                try:
+                    validation_report = get_hypothesis_validation_report(
+                        sci_hyps,
+                        metrics,
+                        self.previous_metrics,
+                        record["turn"],
+                        self.dm.history
+                    )
+                    validation_path = OUT_DIR / f"validation_turn_{record['turn']:04d}.md"
+                    save_report_md(validation_report, validation_path)
+                    self.last_validation_report = validation_report
+                except Exception as e:
+                    print(f"[Warning] Hypothesis validation failed: {e}", file=sys.stderr)
+                    self.last_validation_report = ""
+
+            # Store previous metrics for next validation
+            self.previous_metrics = self.last_metrics
+            self.last_metrics = metrics
+            self.last_hyps = hyps
+
+        return image_url, metrics_md, hyps
 
 
 STATE = AppState()
@@ -153,9 +227,10 @@ def api_start():
     data = request.get_json(silent=True) or {}
     env_index = int(data.get("env_index", DEFAULT_ENV_CONTEXT_INDEX))
     agents_config = data.get("agents")  # Optional: list of agent configurations
-    
+    join_as_participant = bool(data.get("join_as_participant", False))
+
     try:
-        STATE.reset(env_index, agents_config)
+        STATE.reset(env_index, agents_config, join_as_participant=join_as_participant)
     except RuntimeError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     
@@ -170,6 +245,7 @@ def api_start():
             {"name": name, **meta}
             for name, meta in STATE.agents_meta.items()
         ],
+        "user_participating": STATE.user_participating,
     })
 
 
@@ -190,61 +266,7 @@ def api_step():
         text=record["reply"],
     )
 
-    image_url = None
-    metrics_md = None
-    hyps: List[str] = []
-
-    if STATE.dm.should_plot():
-        out_path = OUT_DIR / f"graph_turn_{record['turn']:04d}.png"
-        draw_interactions_pro(
-            agents_meta=STATE.agents_meta,
-            history=list(STATE.dm.history),
-            out_path=out_path,
-            title=f"Interactions and tones (before move {record['turn']})",
-            window=VIZ_EDGE_WINDOW,
-            seed=VIZ_SEED,
-            top_edge_labels=0,
-            per_message_edges=True,
-        )
-        image_url = f"/outputs/{out_path.name}"
-
-        agents_order = list(STATE.agents_meta.keys())
-        metrics = compute_metrics(STATE.dm.history, agents_order, window_size=VIZ_EDGE_WINDOW)
-        hyps = hypotheses_from_metrics(metrics, user_name=None)
-        metrics_md = render_markdown_report(metrics, turn=record["turn"], title="Dialogue — metrics")
-        metrics_path = OUT_DIR / f"metrics_turn_{record['turn']:04d}.md"
-        save_report_md(metrics_md, metrics_path)
-        
-        # Generate scientific report
-        scientific = metrics.get("scientific")
-        if scientific:
-            sci_hyps = generate_scientific_hypotheses(scientific, agents_order)
-            sci_report = render_scientific_report(scientific, sci_hyps, record["turn"])
-            sci_report_path = OUT_DIR / f"scientific_turn_{record['turn']:04d}.md"
-            save_report_md(sci_report, sci_report_path)
-            STATE.last_scientific_hyps = sci_hyps
-            STATE.last_scientific_report = sci_report
-            
-            # Validate hypotheses
-            try:
-                validation_report = get_hypothesis_validation_report(
-                    sci_hyps,
-                    metrics,
-                    STATE.previous_metrics,
-                    record["turn"],
-                    STATE.dm.history  # Передаём историю диалога для извлечения примеров
-                )
-                validation_path = OUT_DIR / f"validation_turn_{record['turn']:04d}.md"
-                save_report_md(validation_report, validation_path)
-                STATE.last_validation_report = validation_report
-            except Exception as e:
-                print(f"[Warning] Hypothesis validation failed: {e}", file=sys.stderr)
-                STATE.last_validation_report = ""
-        
-        # Store previous metrics for next validation
-        STATE.previous_metrics = STATE.last_metrics
-        STATE.last_metrics = metrics
-        STATE.last_hyps = hyps
+    image_url, metrics_md, hyps = STATE.compute_metrics_if_needed(record)
 
     return jsonify({
         "ok": True,
@@ -258,6 +280,59 @@ def api_step():
         "scientific_report": STATE.last_scientific_report if STATE.dm.should_plot() else None,
         "validation_report": STATE.last_validation_report if STATE.dm.should_plot() else None,
         "has_validation_report": bool(STATE.last_validation_report) or bool(list(OUT_DIR.glob("validation_turn_*.md"))),
+        "addressed_user": record.get("target") == "User",
+    })
+
+
+@app.route("/api/user_message", methods=["POST"])
+def api_user_message():
+    """Accept a message from the human participant."""
+    if not STATE.dm or not STATE.logger:
+        return jsonify({"ok": False, "error": "Session not initialized"}), 400
+
+    if not STATE.user_participating:
+        return jsonify({"ok": False, "error": "User is not a participant"}), 400
+
+    data = request.get_json(silent=True) or {}
+    reply = data.get("reply", "").strip()
+    target = data.get("target", "")
+    tone = data.get("tone", "auto")
+
+    if not reply:
+        return jsonify({"ok": False, "error": "Empty message"}), 400
+
+    # Auto-classify tone — simple fallback
+    if tone == "auto":
+        tone = "neutral"
+
+    emotion = "neutral"
+
+    record = STATE.dm.inject_user_turn(reply=reply, target=target, tone=tone, emotion=emotion)
+
+    STATE.logger.write_jsonl(record)
+    STATE.logger.write_markdown(
+        turn_no=record["turn"],
+        speaker=record["speaker"],
+        target=record.get("target"),
+        tone=record["tone"],
+        emotion=record["emotion"],
+        text=record["reply"],
+    )
+
+    image_url, metrics_md, hyps = STATE.compute_metrics_if_needed(record)
+
+    return jsonify({
+        "ok": True,
+        "record": record,
+        "turn": STATE.dm.turn_no,
+        "history": STATE.dm.history[-20:],
+        "image_url": image_url,
+        "hypotheses": hyps or STATE.last_hyps,
+        "metrics_md": metrics_md,
+        "scientific_hypotheses": STATE.last_scientific_hyps,
+        "scientific_report": STATE.last_scientific_report if STATE.dm.should_plot() else None,
+        "validation_report": STATE.last_validation_report if STATE.dm.should_plot() else None,
+        "has_validation_report": bool(STATE.last_validation_report),
     })
 
 

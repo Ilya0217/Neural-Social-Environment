@@ -137,6 +137,14 @@ class DialogueManager:
         phase_block = self._phase_block()
         university_block = self._university_block()
         mood_block = self._mood_guidance(agent.name)
+        # Инструкция про живого пользователя, если он участвует
+        human_block = ""
+        if any(getattr(a, "is_human", False) for a in self.agents):
+            human_block = (
+                "\nUser is a real human participant in this conversation. They type their own messages.\n"
+                "You can address User naturally — ask them questions, react to what they said, include them.\n"
+                "Treat User like any other person in the group.\n"
+            )
         
         sys = (
             agent.system_prompt
@@ -144,6 +152,7 @@ class DialogueManager:
             + f"SETTING: {self.env_context}\n"
             + f"People here: {participants}\n"
             + SESSION_GOAL
+            + human_block
             + phase_block
             + mood_block
             + ("\nYou haven't talked much to: " + ", ".join(target_order[:2]) + "\n" if target_order else "")
@@ -504,6 +513,15 @@ class DialogueManager:
         
         speaker = self.agents[idx]
 
+        # Если выбранный спикер — human, пропускаем его (он пишет через UI)
+        if getattr(speaker, "is_human", False) and not self.human_io:
+            for offset in range(1, len(self.agents)):
+                candidate_idx = (idx + offset) % len(self.agents)
+                if not getattr(self.agents[candidate_idx], "is_human", False):
+                    idx = candidate_idx
+                    speaker = self.agents[idx]
+                    break
+
         # Allowed targets (all except self)
         allowed_targets = [a.name for a in self.agents if a.name != speaker.name] or [a.name for a in self.agents]
 
@@ -531,7 +549,7 @@ class DialogueManager:
         target = normalize_target(parsed.target)
         self._adjust_mood(speaker.name, parsed.tone, target)
 
-        # === VALIDATION ===
+        # === VALIDATION with CRITICAL regeneration ===
         turn_data = {
             "speaker": speaker.name,
             "target": target,
@@ -539,8 +557,9 @@ class DialogueManager:
             "tone": parsed.tone,
             "emotion": parsed.emotion,
         }
-        
+
         validation_results = []
+        is_valid = True
         if self.enable_validation and self.validation_pipeline:
             context = {
                 "history": self.history,
@@ -548,7 +567,7 @@ class DialogueManager:
                 "env_context": self.env_context,
             }
             is_valid, validation_results = self.validation_pipeline.validate_turn(turn_data, context)
-            
+
             # Log validation issues
             if validation_results:
                 import sys
@@ -556,7 +575,42 @@ class DialogueManager:
                 print(f"\n[Validation Turn {self.turn_no}]", file=sys.stderr)
                 print(formatted, file=sys.stderr)
                 print("", file=sys.stderr)
-        
+
+            # Если CRITICAL — перегенерируем (до 2 попыток)
+            if not is_valid and not getattr(speaker, "is_human", False):
+                for retry_attempt in range(2):
+                    import sys
+                    print(f"[Validation] CRITICAL error detected, regenerating (attempt {retry_attempt + 1}/2)...", file=sys.stderr)
+                    try:
+                        messages = self.build_messages(idx)
+                        parsed = self.model_turn(messages, allowed_targets, agent=speaker)
+                        target = normalize_target(parsed.target)
+                        turn_data = {
+                            "speaker": speaker.name,
+                            "target": target,
+                            "reply": parsed.reply,
+                            "tone": parsed.tone,
+                            "emotion": parsed.emotion,
+                        }
+                        is_valid, validation_results = self.validation_pipeline.validate_turn(turn_data, context)
+                        if is_valid:
+                            print(f"[Validation] Regeneration successful on attempt {retry_attempt + 1}", file=sys.stderr)
+                            break
+                    except Exception as e:
+                        print(f"[Validation] Regeneration attempt {retry_attempt + 1} failed: {e}", file=sys.stderr)
+
+                # Если после 2 попыток всё ещё CRITICAL — safe fallback
+                if not is_valid:
+                    print("[Validation] All regeneration attempts failed, using safe fallback", file=sys.stderr)
+                    parsed = AgentTurn(
+                        reply="Hmm, let me think about that for a moment...",
+                        tone="neutral",
+                        emotion="thoughtful",
+                        target=allowed_targets[0] if allowed_targets else None,
+                    )
+                    target = normalize_target(parsed.target)
+                    self._adjust_mood(speaker.name, parsed.tone, target)
+
         record = {
             "turn": self.turn_no,
             "ts_utc": datetime.utcnow().isoformat(),
@@ -578,6 +632,46 @@ class DialogueManager:
         self.history.append(record)
         return record, ({"src": speaker.name, "dst": target, "tone": parsed.tone} if target else None)
     
+    def inject_user_turn(self, reply: str, target: str, tone: str = "neutral", emotion: str = "neutral") -> Dict[str, Any]:
+        """Inject a user's message into the dialogue history (web UI)."""
+        self._decay_moods()
+        self.turn_no += 1
+
+        target = normalize_target(target)
+        if "User" not in self.agent_moods:
+            self.agent_moods["User"] = 0.0
+        self._adjust_mood("User", tone, target)
+
+        record = {
+            "turn": self.turn_no,
+            "ts_utc": datetime.utcnow().isoformat(),
+            "env_context": self.env_context,
+            "speaker": "User",
+            "speaker_nature": "human",
+            "reply": reply,
+            "tone": tone,
+            "emotion": emotion,
+            "target": target,
+            "is_human": True,
+            "validation_issues": 0,
+        }
+
+        # Валидация
+        if self.enable_validation and self.validation_pipeline:
+            turn_data = {"speaker": "User", "target": target, "reply": reply, "tone": tone, "emotion": emotion}
+            allowed_targets = [a.name for a in self.agents if a.name != "User"]
+            context = {"history": self.history, "allowed_targets": allowed_targets, "env_context": self.env_context}
+            is_valid, validation_results = self.validation_pipeline.validate_turn(turn_data, context)
+            record["validation_issues"] = len(validation_results) if validation_results else 0
+
+        if target:
+            self.edges_window.append({"src": "User", "dst": target, "tone": tone})
+            if len(self.edges_window) > 10:
+                self.edges_window = self.edges_window[-10:]
+
+        self.history.append(record)
+        return record
+
     def should_plot(self) -> bool:
         """
         Определяет, нужно ли строить граф на текущем шаге.

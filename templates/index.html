@@ -41,6 +41,12 @@
                             <option value="{{ loop.index0 }}">{{ e }}</option>
                         {% endfor %}
                     </select>
+
+                    <label class="wizard-label" style="margin-top: 28px; display: flex; align-items: center; gap: 12px; cursor: pointer;">
+                        <input type="checkbox" id="joinAsParticipant" checked style="width: 18px; height: 18px; accent-color: var(--accent);">
+                        Join as participant
+                    </label>
+                    <p class="wizard-hint" style="margin-top: 4px; font-size: 12px; color: var(--text-dim);">You will appear as "User" in the dialogue. Agents can address you.</p>
                 </div>
                 
                 <div class="wizard-actions">
@@ -215,6 +221,7 @@
             </div>
             <div class="controls">
                 <button id="newSessionBtn" class="btn">New Session</button>
+                <button id="participateBtn" class="btn btn-participate" style="display: none;">Participate</button>
                 <button id="stepBtn" class="btn btn-primary" disabled>Next message</button>
                 <a class="btn btn-download" id="downloadLog" href="/download/log">Download JSONL</a>
                 <a class="btn" id="downloadLogMd" href="/download/log_md">Download MD</a>
@@ -364,6 +371,34 @@
         <footer class="footer">
             <span id="status">Ready</span>
         </footer>
+    </div>
+
+    <!-- User participation modal -->
+    <div id="userInputModal" class="modal-overlay" style="display: none;">
+        <div class="modal-card">
+            <h3>Your turn to speak</h3>
+            <div class="form-group">
+                <label>Address to:</label>
+                <select id="userTargetSelect" class="wizard-select"></select>
+            </div>
+            <div class="form-group">
+                <label>Your message:</label>
+                <textarea id="userReplyInput" class="wizard-input" rows="3" placeholder="Type your message..."></textarea>
+            </div>
+            <div class="form-group">
+                <label>Tone:</label>
+                <select id="userToneSelect" class="wizard-select">
+                    <option value="auto">Auto-detect</option>
+                    <option value="positive">Positive</option>
+                    <option value="neutral" selected>Neutral</option>
+                    <option value="negative">Negative</option>
+                </select>
+            </div>
+            <div class="modal-actions">
+                <button id="userCancelBtn" class="btn">Cancel</button>
+                <button id="userSendBtn" class="btn btn-primary">Send</button>
+            </div>
+        </div>
     </div>
 
     <script src="/static/app.js"></script>

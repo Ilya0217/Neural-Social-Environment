@@ -63,11 +63,22 @@ const tabBtns = document.querySelectorAll('.tab-btn');
 const dialogueTab = el('dialogueTab');
 const scientificTab = el('scientificTab');
 
+// User participation elements
+const participateBtn = el('participateBtn');
+const userInputModal = el('userInputModal');
+const userTargetSelect = el('userTargetSelect');
+const userReplyInput = el('userReplyInput');
+const userToneSelect = el('userToneSelect');
+const userSendBtn = el('userSendBtn');
+const userCancelBtn = el('userCancelBtn');
+const joinAsParticipantCheckbox = el('joinAsParticipant');
+
 // ==================== STATE ====================
 let agentCount = 3;
 let currentAgentIndex = 0;
 let agents = [];
 let running = false;
+let userParticipating = false;
 
 // Extended default agent configurations for up to 20 agents
 const DEFAULT_AGENT_NAMES = [
@@ -212,7 +223,9 @@ startDialogueBtn.addEventListener('click', async () => {
 // New session button
 newSessionBtn.addEventListener('click', () => {
   running = false;
+  userParticipating = false;
   stepBtn.disabled = true;
+  if (participateBtn) participateBtn.style.display = 'none';
   mainApp.style.display = 'none';
   setupWizard.style.display = 'flex';
   step2.classList.remove('active');
@@ -261,6 +274,15 @@ function updateAgentForm() {
   const q = agent.questionnaire || {};
   qBackground.value = q.background || '';
   qMotivation.value = q.motivation || '';
+  qSocialStyle.value = q.social_style || '';
+  qConflictApproach.value = q.conflict_approach || '';
+  qDecisionStyle.value = q.decision_style || '';
+  qTrustLevel.value = q.trust_level || '';
+  qCooperationStyle.value = q.cooperation_style || '';
+  qEmotionalOpenness.value = q.emotional_openness || '';
+  qLeadershipTendency.value = q.leadership_tendency || '';
+  qCriticismReaction.value = q.criticism_reaction || '';
+  qGroupDynamics.value = q.group_dynamics || '';
   qSpeechFlaws.value = q.speech_flaws || '';
   qFavoriteTopics.value = q.favorite_topics || '';
   qStressReaction.value = q.stress_reaction || '';
@@ -353,8 +375,10 @@ async function startSession() {
   }, 2500);
   
   try {
+    const joinChecked = joinAsParticipantCheckbox ? joinAsParticipantCheckbox.checked : false;
     const data = await api('/api/start', 'POST', {
       env_index: envIndex,
+      join_as_participant: joinChecked,
       agents: agents.map(a => ({
         name: a.name,
         nature: a.nature,
@@ -406,6 +430,12 @@ async function startSession() {
       renderAgentBadges();
     }
     
+    // Set user participation state
+    userParticipating = !!data.user_participating;
+    if (participateBtn) {
+      participateBtn.style.display = userParticipating ? 'inline-flex' : 'none';
+    }
+
     statusEl.textContent = 'Session started. Click "Next message".';
   } catch (e) {
     clearInterval(loadingInterval);
@@ -452,20 +482,22 @@ function renderHistory(history) {
   const reversedHistory = [...history].reverse();
   reversedHistory.forEach(r => {
     const item = document.createElement('div');
-    item.className = 'msg';
+    const isUser = r.speaker === 'User' || r.is_human;
+    item.className = 'msg' + (isUser ? ' msg-user' : '');
     const tgt = r.target || 'all';
-    
+
     // Find agent color
     const agent = agents.find(a => a.name === r.speaker);
     const color = agent ? agent.color : '#6b7a94';
-    
-    const toneColor = r.tone === 'positive' ? 'var(--tone-positive)' 
-                   : r.tone === 'negative' ? 'var(--tone-negative)' 
+
+    const toneColor = r.tone === 'positive' ? 'var(--tone-positive)'
+                   : r.tone === 'negative' ? 'var(--tone-negative)'
                    : 'var(--tone-neutral)';
     item.style.borderLeftColor = color;
+    const youTag = isUser ? ' <span class="you-tag">(You)</span>' : '';
     item.innerHTML = `
       <div class="meta">
-        <span class="speaker" style="color:${color}">${r.speaker}</span>
+        <span class="speaker" style="color:${color}">${r.speaker}</span>${youTag}
         <span class="arrow">→</span>
         <span class="target">${tgt}</span>
         <span class="tone-dot" style="background:${toneColor}"></span>
@@ -703,7 +735,15 @@ stepBtn.addEventListener('click', async () => {
     }
     
     statusEl.textContent = `Turn: ${data.turn}`;
-    
+
+    // Notify if agent addressed User
+    if (data.addressed_user && userParticipating && participateBtn) {
+      participateBtn.classList.add('btn-participate-pulse');
+      statusEl.textContent = `${data.record.speaker} addressed you — click Participate to respond`;
+    } else if (participateBtn) {
+      participateBtn.classList.remove('btn-participate-pulse');
+    }
+
     // Check for validation button visibility
     checkValidationButton(data);
   } catch (e) {
@@ -802,6 +842,79 @@ if (runObserverBtn) {
     runObserverBtn.textContent = 'Run Observer Analysis';
   });
 }
+
+// ==================== USER PARTICIPATION ====================
+
+if (participateBtn) {
+  participateBtn.addEventListener('click', () => {
+    // Заполнить список агентов (все кроме User и Observer)
+    userTargetSelect.innerHTML = '';
+    agents.filter(a => a.name !== 'User' && !a.is_observer).forEach(a => {
+      const opt = document.createElement('option');
+      opt.value = a.name;
+      opt.textContent = a.name;
+      userTargetSelect.appendChild(opt);
+    });
+    userReplyInput.value = '';
+    userToneSelect.value = 'auto';
+    userInputModal.style.display = 'flex';
+    userReplyInput.focus();
+    participateBtn.classList.remove('btn-participate-pulse');
+  });
+}
+
+if (userCancelBtn) {
+  userCancelBtn.addEventListener('click', () => {
+    userInputModal.style.display = 'none';
+  });
+}
+
+if (userSendBtn) {
+  userSendBtn.addEventListener('click', async () => {
+    const reply = userReplyInput.value.trim();
+    if (!reply) return;
+
+    const target = userTargetSelect.value;
+    const tone = userToneSelect.value;
+
+    userSendBtn.disabled = true;
+    userSendBtn.textContent = 'Sending...';
+
+    try {
+      const data = await api('/api/user_message', 'POST', { reply, target, tone });
+      if (!data.ok) throw new Error(data.error || 'Failed');
+
+      userInputModal.style.display = 'none';
+      renderHistory(data.history || []);
+      statusEl.textContent = `Turn: ${data.turn}`;
+
+      if (data.image_url) {
+        graphImg.src = data.image_url + '?t=' + Date.now();
+        graphImg.style.display = 'block';
+        const placeholder = document.getElementById('graphPlaceholder');
+        if (placeholder) placeholder.style.display = 'none';
+      }
+      if (data.hypotheses) renderHyps(data.hypotheses);
+      if (data.metrics_md) renderMetrics(data.metrics_md);
+      if (data.scientific_report) renderScientificReport(data.scientific_report);
+      if (data.scientific_hypotheses) renderScientificHypotheses(data.scientific_hypotheses);
+      checkValidationButton(data);
+    } catch (e) {
+      console.error(e);
+      statusEl.textContent = 'Error: ' + e.message;
+    } finally {
+      userSendBtn.disabled = false;
+      userSendBtn.textContent = 'Send';
+    }
+  });
+}
+
+// Close modal on Escape key
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && userInputModal && userInputModal.style.display === 'flex') {
+    userInputModal.style.display = 'none';
+  }
+});
 
 // Simple markdown to HTML renderer
 function renderMarkdown(md) {

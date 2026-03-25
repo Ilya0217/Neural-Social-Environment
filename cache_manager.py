@@ -1,6 +1,9 @@
 """
 Intelligent caching system for dialogue responses.
 Reduces API calls and costs by caching similar contexts.
+
+NOTE: This module is not yet integrated into the main pipeline.
+See dialogue_manager.py for the current API call flow.
 """
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, field

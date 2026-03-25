@@ -1,4 +1,5 @@
 from typing import List, Dict, Any, Optional
+import json
 import re
 from .prompts import AgentTurn
 
@@ -37,7 +38,12 @@ class HumanIO:
             )
             raw = (resp.choices[0].message.content or "").strip()
             m = re.search(r"\{.*\}", raw, re.S)
-            return eval(m.group(0)) if m else {"tone": "neutral", "emotion": "neutral"}
+            if m:
+                try:
+                    return json.loads(m.group(0))
+                except json.JSONDecodeError:
+                    return {"tone": "neutral", "emotion": "neutral"}
+            return {"tone": "neutral", "emotion": "neutral"}
         except Exception:
             return {"tone": "neutral", "emotion": "neutral"}
 
