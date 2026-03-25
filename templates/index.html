@@ -228,6 +228,8 @@
         <div class="tab-nav">
             <button class="tab-btn active" data-tab="dialogue">💬 Dialogue</button>
             <button class="tab-btn" data-tab="scientific">🔬 Scientific Analysis</button>
+            <button class="tab-btn" data-tab="advanced">📈 Advanced Analytics</button>
+            <button class="tab-btn" data-tab="observer">🔭 Observer Agent</button>
         </div>
 
         <!-- DIALOGUE TAB -->
@@ -244,7 +246,18 @@
             <section class="panel graph">
                 <h2>Interaction graph</h2>
                 <div class="img-wrap">
-                    <img id="graphImg" src="" alt="Graph" />
+                    <div id="graphPlaceholder" class="graph-placeholder">
+                        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.2">
+                            <circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/>
+                            <circle cx="12" cy="18" r="2"/><circle cx="6" cy="14" r="2"/>
+                            <line x1="7.5" y1="7" x2="11" y2="16.5" opacity="0.5"/>
+                            <line x1="16.5" y1="7" x2="13" y2="16.5" opacity="0.5"/>
+                            <line x1="6" y1="8" x2="6" y2="12" opacity="0.5"/>
+                            <line x1="8" y1="6" x2="16" y2="6" opacity="0.3"/>
+                        </svg>
+                        <span>Graph appears after 5 messages</span>
+                    </div>
+                    <img id="graphImg" src="" alt="Graph" style="display:none;" />
                 </div>
             </section>
 
@@ -264,15 +277,16 @@
             <section class="panel scientific-report">
                 <h2>🔬 Scientific Analysis Report</h2>
                 <div class="scientific-info">
-                    <p>This analysis is based on modern scientific frameworks (1990-2025):</p>
+                    <p>This analysis is based on modern scientific frameworks (2010-2025):</p>
                     <ul>
-                        <li><strong>Social Network Analysis</strong> — Borgatti et al. (2009); Barabási & Albert (1999)</li>
-                        <li><strong>Social Capital & Structural Holes</strong> — Burt (2004); Gittell (2002)</li>
-                        <li><strong>Dialogue Act Taxonomy</strong> — ISO 24617-2, Bunt et al. (2017)</li>
-                        <li><strong>Computational Pragmatics</strong> — Clark (1996); Jurafsky & Martin (2023)</li>
-                        <li><strong>Computer-Mediated Discourse Analysis</strong> — Herring (2004); Androutsopoulos (2006)</li>
-                        <li><strong>Dimensional Emotion Model</strong> — Russell & Barrett (1999); Mohammad & Turney (2013)</li>
-                        <li><strong>Integrated Model of Group Development</strong> — Wheelan (2009); Kozlowski & Ilgen (2006)</li>
+                        <li><strong>Multidimensional Networks in Teams</strong> — Contractor et al. (2012)</li>
+                        <li><strong>Network Dynamics & Team Performance</strong> — Reagans et al. (2016); Leenders et al. (2016)</li>
+                        <li><strong>Dialogue Act Taxonomy</strong> — ISO 24617-2, Bunt et al. (2020)</li>
+                        <li><strong>Computational Dialogue Analysis</strong> — Jurafsky & Martin (2024)</li>
+                        <li><strong>Language Style Matching & LIWC</strong> — Tausczik & Pennebaker (2010); Gonzales et al. (2010)</li>
+                        <li><strong>High-Dimensional Emotion Model</strong> — Cowen & Keltner (2017); Demszky et al. (2020)</li>
+                        <li><strong>Team Temporal Dynamics</strong> — Shuffler et al. (2018); Mathieu et al. (2017)</li>
+                        <li><strong>Affect in Text & Sentiment</strong> — Mohammad et al. (2018)</li>
                     </ul>
                 </div>
                 <div id="scientificReport" class="scroll scientific-content"></div>
@@ -284,6 +298,66 @@
                     <a class="btn btn-download" id="downloadValidation" href="/download/validation" style="display: none;" title="Скачать отчёт о проверке гипотез с доказательствами">📥 Download Validation Report</a>
                 </div>
                 <div id="scientificHypotheses" class="scroll"></div>
+            </section>
+        </main>
+
+        <!-- ADVANCED ANALYTICS TAB -->
+        <main id="advancedTab" class="scientific-grid tab-content">
+            <section class="panel scientific-report">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+                    <h2 style="margin:0;">📈 Advanced Analytics</h2>
+                    <button id="loadAdvancedBtn" class="btn btn-primary">Load Analysis</button>
+                </div>
+                <div class="scientific-info">
+                    <p>Emotional Contagion, Language Style Matching, and Discourse Coherence analysis.</p>
+                    <ul>
+                        <li><strong>Emotional Contagion</strong> — Barsade (2002); Hatfield et al. (1994)</li>
+                        <li><strong>Language Style Matching</strong> — Gonzales et al. (2010); Tausczik & Pennebaker (2010)</li>
+                        <li><strong>Discourse Coherence</strong> — Graesser et al. (2014); McNamara et al. (2014)</li>
+                    </ul>
+                </div>
+                <div id="advancedReport" class="scroll scientific-content">
+                    <p style="color:var(--text-secondary);padding:2rem;text-align:center;">
+                        Click "Load Analysis" after at least 3 dialogue turns.
+                    </p>
+                </div>
+            </section>
+
+            <section class="panel scientific-hypotheses">
+                <h2>📊 Key Metrics</h2>
+                <div id="advancedMetrics">
+                    <p style="color:var(--text-secondary);padding:2rem;text-align:center;">
+                        No data yet.
+                    </p>
+                </div>
+            </section>
+        </main>
+
+        <!-- OBSERVER AGENT TAB -->
+        <main id="observerTab" class="scientific-grid tab-content">
+            <section class="panel scientific-report">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h2 style="margin: 0;">🔭 Observer Agent — Methodological Triangulation</h2>
+                    <button id="runObserverBtn" class="btn btn-primary">Run Observer Analysis</button>
+                </div>
+                <div class="scientific-info">
+                    <p>Non-participating LLM observer that independently analyzes dialogue and compares
+                    its qualitative findings with algorithmic metrics (Denzin, 2012).</p>
+                </div>
+                <div id="observerReport" class="scroll scientific-content">
+                    <p style="color: var(--text-secondary); padding: 2rem; text-align: center;">
+                        Click "Run Observer Analysis" after at least 3 dialogue turns to generate a triangulation report.
+                    </p>
+                </div>
+            </section>
+
+            <section class="panel scientific-hypotheses">
+                <h2>📊 Triangulation Summary</h2>
+                <div id="triangulationSummary" class="scroll">
+                    <p style="color: var(--text-secondary); padding: 2rem; text-align: center;">
+                        No observations yet. Run the observer to see convergence/divergence analysis.
+                    </p>
+                </div>
             </section>
         </main>
 

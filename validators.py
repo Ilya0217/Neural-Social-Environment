@@ -71,7 +71,7 @@ class GrammaticalValidator(BaseValidator):
         
         # 2. Length checks
         words = reply.split()
-        if len(words) > 50:
+        if len(words) > 80:
             results.append(ValidationResult(
                 level=ValidationLevel.WARNING,
                 validator_name=self.name,

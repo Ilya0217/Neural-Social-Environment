@@ -236,21 +236,133 @@ def initialize_agents(interactive: bool) -> List[Agent]:
     return initialized
 
 
-def initialize_agents_from_config(agents_config: List[Dict[str, Any]]) -> List[Agent]:
+def _generate_big_five_via_llm(client: Any, name: str, nature: str, answers: Dict[str, str]) -> Optional["BigFiveProfile"]:
+    """
+    Use LLM to generate Big Five profile based on agent's role and questionnaire.
+
+    The LLM analyzes the persona configuration and produces OCEAN scores
+    that are psychologically consistent with the described behavior.
+    """
+    from .agents import BigFiveProfile
+    from .config import MODEL
+    import re
+
+    # Build context from questionnaire answers
+    context_lines = [f"Name: {name}", f"Role: {nature}"]
+    for key, val in answers.items():
+        if val:
+            context_lines.append(f"- {key.replace('_', ' ').title()}: {val}")
+    context = "\n".join(context_lines)
+
+    prompt = f"""Analyze this person's profile and produce Big Five (OCEAN) personality scores.
+
+{context}
+
+Based on their role, background, social style, conflict approach, emotional openness, 
+leadership tendency, and communication style, assign scores from 0.0 to 1.0 for each trait.
+
+Rules:
+- Be psychologically consistent: e.g. someone who "avoids conflict" → high Agreeableness, low Neuroticism
+- Someone who "speaks up first" → high Extraversion
+- Someone "skeptical, verifies facts" → low Agreeableness, high Conscientiousness
+- Make scores varied and realistic — NOT all 0.5, real people have peaks and valleys
+- Scores should range from 0.15 to 0.95
+
+Respond with ONLY a JSON object:
+{{"openness": 0.X, "conscientiousness": 0.X, "extraversion": 0.X, "agreeableness": 0.X, "neuroticism": 0.X}}"""
+
+    try:
+        resp = client.chat.completions.create(
+            model=MODEL,
+            temperature=0.3,
+            max_tokens=100,
+            messages=[
+                {"role": "system", "content": "You are a psychologist. Output only valid JSON."},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        raw = resp.choices[0].message.content or ""
+        m = re.search(r"\{[^}]+\}", raw)
+        if m:
+            import json
+            data = json.loads(m.group(0))
+            return BigFiveProfile(
+                openness=max(0.1, min(1.0, float(data.get("openness", 0.5)))),
+                conscientiousness=max(0.1, min(1.0, float(data.get("conscientiousness", 0.5)))),
+                extraversion=max(0.1, min(1.0, float(data.get("extraversion", 0.5)))),
+                agreeableness=max(0.1, min(1.0, float(data.get("agreeableness", 0.5)))),
+                neuroticism=max(0.1, min(1.0, float(data.get("neuroticism", 0.5)))),
+            )
+    except Exception as e:
+        import sys
+        print(f"[BigFive LLM generation failed] {e}", file=sys.stderr)
+    return None
+
+
+def _generate_persona_via_llm(client: Any, name: str, nature: str, answers: Dict[str, str]) -> Optional[str]:
+    """
+    Use LLM to generate a rich, unique persona description based on agent config.
+
+    Instead of templated persona text, the LLM creates a natural backstory 
+    with speech habits, quirks, and personality that's consistent with the questionnaire.
+    """
+    from .config import MODEL
+    
+    context_lines = [f"Name: {name}", f"Role: {nature}"]
+    for key, val in answers.items():
+        if val:
+            context_lines.append(f"- {key.replace('_', ' ').title()}: {val}")
+    context = "\n".join(context_lines)
+
+    prompt = f"""Create a brief, vivid character profile for a dialogue simulation agent.
+
+Configuration:
+{context}
+
+Write 6-8 lines that define WHO this person is. Include:
+1. A one-line backstory (age, job, one personal detail)
+2. Their speaking style — specific quirks, filler words, sentence patterns
+3. How they react in conversations — what triggers them, what excites them
+4. One or two signature phrases they'd naturally use
+
+Make it feel like a real human — messy, specific, not generic.
+Do NOT use bullet points or labels. Write it as a natural character description.
+Keep it under 150 words. English only."""
+
+    try:
+        resp = client.chat.completions.create(
+            model=MODEL,
+            temperature=0.85,
+            max_tokens=250,
+            messages=[
+                {"role": "system", "content": "You are a character designer for a social simulation. Create vivid, specific, non-generic personas."},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        if len(raw) > 30:
+            return raw
+    except Exception as e:
+        import sys
+        print(f"[Persona LLM generation failed] {e}", file=sys.stderr)
+    return None
+
+
+def initialize_agents_from_config(
+    agents_config: List[Dict[str, Any]],
+    client: Any = None,
+) -> List[Agent]:
     """
     Build Agent instances from web-provided configuration.
     
-    Each agent config should have:
-    - name: str
-    - nature: str (explorer, critic, facilitator, or custom role)
-    - color: str (hex color)
-    - questionnaire: dict with keys:
-        Basic: background, motivation
-        Social: social_style, conflict_approach, decision_style, trust_level,
-                cooperation_style, emotional_openness, leadership_tendency,
-                criticism_reaction, group_dynamics
-        Communication: speech_flaws, favorite_topics, stress_reaction, signature_phrase
+    If an OpenAI client is provided, uses LLM to:
+    1. Generate Big Five profile based on role + questionnaire
+    2. Generate rich persona description based on role + questionnaire
+    
+    Falls back to deterministic generation if LLM is unavailable.
     """
+    from .agents import BigFiveProfile, generate_random_big_five
+    
     initialized: List[Agent] = []
     
     for cfg in agents_config:
@@ -259,17 +371,29 @@ def initialize_agents_from_config(agents_config: List[Dict[str, Any]]) -> List[A
         color = cfg.get("color", "#6d9df4")
         questionnaire = cfg.get("questionnaire", {})
         
-        # Ensure all questionnaire fields have values (use defaults if empty)
+        # Ensure all questionnaire fields have values
         answers = _ensure_answers(nature, questionnaire)
         
-        # Format persona text from answers
-        persona_text = _format_persona(name, nature, answers)
+        # Generate Big Five via LLM if client available
+        big_five = None
+        persona_text = None
+        
+        if client:
+            import sys
+            print(f"[init] Generating profile for {name} ({nature}) via LLM...", file=sys.stderr)
+            big_five = _generate_big_five_via_llm(client, name, nature, answers)
+            persona_text = _generate_persona_via_llm(client, name, nature, answers)
+        
+        # Fallback: template persona if LLM failed
+        if not persona_text:
+            persona_text = _format_persona(name, nature, answers)
         
         initialized.append(Agent(
             name=name,
             nature=nature,
             color=color,
-            persona=persona_text
+            persona=persona_text,
+            big_five=big_five,  # None → __post_init__ will use preset or hash
         ))
     
     return initialized

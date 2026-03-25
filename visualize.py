@@ -2,6 +2,8 @@
 from pathlib import Path
 from typing import List, Dict, Any, Tuple
 import math
+import matplotlib
+matplotlib.use("Agg")  # Non-interactive backend for thread safety
 import networkx as nx
 import matplotlib.pyplot as plt
 from matplotlib import colors as mcolors

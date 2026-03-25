@@ -139,51 +139,26 @@ class DialogueManager:
         mood_block = self._mood_guidance(agent.name)
         
         sys = (
-            f"REAL SITUATION: {self.env_context}\n\n"
-            + "You are in a REAL meeting/discussion right now. This is happening in real-time. "
-            + "You are a REAL PERSON, not an AI. Act naturally, react authentically, think out loud.\n\n"
-            + agent.system_prompt
+            agent.system_prompt
             + "\n\n"
+            + f"SETTING: {self.env_context}\n"
+            + f"People here: {participants}\n"
             + SESSION_GOAL
             + phase_block
-            + university_block
             + mood_block
-            + "\n\n"
-            + f"Other people in this conversation: {participants}\n"
-            + "You're all sitting together (or in a video call) having this discussion right now.\n"
-            + "When you speak, address one specific person by name - pick who you're naturally responding to or who you want to engage with.\n"
-            + "Don't address everyone at once - talk to one person, like in a real conversation.\n"
-            + "IMPORTANT: Always use INFORMAL 'you' (ты) when addressing others - this is a casual, friendly conversation.\n"
-            + "Never use formal language - speak naturally and informally, like real people do in real meetings.\n"
-            + ("\nPeople you haven't talked to much recently: " + ", ".join(target_order[:3]) + " - consider engaging with them.\n" if target_order else "\n")
-            + "\nWhat's been said so far (this is the actual conversation happening right now):\n"
-            + (content_summary or "(This is the start of the conversation - you're all just beginning to discuss this.)")
-            + "\n\n"
-            + "YOUR TURN TO SPEAK:\n"
-            + "You're a real person in a real conversation. React naturally to what's been said.\n"
-            + "- Always use INFORMAL 'you' (ты) when addressing others - never formal language\n"
-            + "- If someone said something interesting, react to it naturally\n"
-            + "- If you have a question, ask it like a real person would: 'What do you think?', 'How would you approach this?'\n"
-            + "- If you're thinking about something, share your thoughts naturally\n"
-            + "- If you agree or disagree, say so authentically: 'You're right about that', 'I see what you mean'\n"
-            + "- Reference specific things people said - show you're actually listening\n"
-            + "- Sound like you're really there, really engaged, really thinking\n"
-            + "- Don't sound scripted or robotic - be spontaneous and natural\n"
-            + "- Speak informally and casually, like friends/colleagues do\n"
-            + ("- REMEMBER: Keep it SIMPLE - use everyday words, short sentences, casual language\n" if "University" in self.env_context or "university" in self.env_context.lower() else "")
+            + ("\nYou haven't talked much to: " + ", ".join(target_order[:2]) + "\n" if target_order else "")
+            + "\n--- CONVERSATION ---\n"
+            + (content_summary or "(Just starting. Say something to kick things off.)")
+            + "\n---\n\n"
+            + "Your turn. Talk to ONE person by name.\n"
+            + HUMAN_STYLE
             + "\n"
             + STRUCTURE_INSTRUCTION
-            + "\n\n"
-            + HUMAN_STYLE
-            + "\n\n"
-            + "Respond by calling submit_agent_turn with your natural, human reply."
         )
         return [
             {"role": "system", "content": sys},
             {"role": "user", "content": 
-                "It's your turn to speak in this real conversation. "
-                "You're a real person, reacting naturally to what others just said. "
-                "Speak authentically - show you're listening, thinking, and genuinely engaged. "
+                "Your turn. React to what was just said — be yourself."
                 "Reference what people actually said, react naturally, and be yourself. "
                 "This isn't a script - it's a real conversation happening right now. "
                 "Respond naturally by calling submit_agent_turn with your authentic reply, tone, emotion, and who you're addressing."}
@@ -240,7 +215,7 @@ class DialogueManager:
         from openai import RateLimitError
         
         max_retries = 3
-        retry_delay = 20  # секунд для rate limit
+        retry_delay = 3  # секунд для rate limit
         
         def make_api_call(call_func, description="API call"):
             """Выполняет API вызов с retry логикой для rate limit"""

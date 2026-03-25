@@ -17,13 +17,14 @@ OUT_DIR = Path(os.getenv("AGENT_OUTPUT_DIR") or (RUNTIME_BASE / "outputs"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")  # Can be overridden via .env
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", None)  # e.g. https://openrouter.ai/api/v1
+MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")  # Can be overridden via .env
 DEFAULT_ENV_CONTEXT_INDEX = int(os.getenv("ENV_CONTEXT_INDEX", "0"))  # 0..2
 AGENT_PROFILES_PATH = os.getenv("AGENT_PROFILES_PATH", "")
 
-TEMPERATURE = 0.85  # Higher temperature for more natural, varied, human-like responses
-MAX_TOKENS = 600
+TEMPERATURE = 0.95  # High temperature for messy, unpredictable, human-like responses
+MAX_TOKENS = 300   # Shorter = more natural, less essay-like
 TURNS_BETWEEN_PLOTS = 5
 
 VIZ_EDGE_WINDOW = 12         # последние N ходов для рёбер

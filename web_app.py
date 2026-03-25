@@ -4,12 +4,13 @@ from typing import Any, Dict, List, Optional
 import sys
 
 from flask import Flask, jsonify, render_template, request, send_from_directory, send_file
-import anthropic
+from openai import OpenAI
 
 from .config import (
     LOG_DIR,
     OUT_DIR,
-    ANTHROPIC_API_KEY,
+    OPENAI_API_KEY,
+    OPENAI_BASE_URL,
     DEFAULT_ENV_CONTEXT_INDEX,
     VIZ_EDGE_WINDOW,
     VIZ_SEED,
@@ -30,6 +31,8 @@ from .analytics import (
 )
 from .scientific_analytics import render_scientific_report, generate_scientific_hypotheses
 from .profiles import initialize_agents, initialize_agents_from_config
+from .observer_agent import ObserverAgent
+from .advanced_analytics import compute_advanced_analysis, render_advanced_report
 
 
 app = Flask(
@@ -41,10 +44,10 @@ app = Flask(
 
 class AppState:
     def __init__(self):
-        self.client: Optional[anthropic.Anthropic] = None
+        self.client: Optional[OpenAI] = None
         self.dm: Optional[DialogueManager] = None
         self.logger: Optional[IOLogger] = None
-        self.agents_meta: Dict[str, Dict[str, str]] = {}
+        self.agents_meta: Dict[str, Dict[str, Any]] = {}
         self.env_context: str = ""
         self.last_metrics: Optional[Dict[str, Any]] = None
         self.last_hyps: List[str] = []
@@ -52,12 +55,14 @@ class AppState:
         self.last_scientific_report: str = ""
         self.last_validation_report: str = ""
         self.previous_metrics: Optional[Dict[str, Any]] = None
+        self.observer: Optional[ObserverAgent] = None
+        self.last_observer_report: str = ""
 
     def reset(self, env_index: int, agents_config: Optional[List[Dict[str, Any]]] = None):
-        if not ANTHROPIC_API_KEY:
-            raise RuntimeError("ANTHROPIC_API_KEY is not set")
+        if not OPENAI_API_KEY:
+            raise RuntimeError("OPENAI_API_KEY is not set")
 
-        self.client = anthropic.Anthropic()
+        self.client = OpenAI(**({"base_url": OPENAI_BASE_URL} if OPENAI_BASE_URL else {}))
 
         options = list_env_contexts()
         idx = env_index if 0 <= env_index < len(options) else DEFAULT_ENV_CONTEXT_INDEX
@@ -88,13 +93,17 @@ class AppState:
                 pass
 
         # Initialize agents from config or use defaults
+        # Pass client so LLM can generate Big Five + persona
         if agents_config:
-            agents = initialize_agents_from_config(agents_config)
+            agents = initialize_agents_from_config(agents_config, client=self.client)
         else:
             agents = initialize_agents(interactive=False)
         
         # В web-версии опускаем живого пользователя, чтобы не блокировать UI
         self.dm = DialogueManager(client=self.client, agents=agents, env_context=self.env_context, human_io=None)
+        # Initialize observer agent for methodological triangulation
+        self.observer = ObserverAgent(client=self.client)
+        self.last_observer_report = ""
 
         self.logger = IOLogger(
             jsonl_path=LOG_DIR / "dialog.jsonl",
@@ -110,7 +119,22 @@ class AppState:
             (LOG_DIR / "dialog.md").write_text("", encoding="utf-8")
         except Exception:
             pass
-        self.agents_meta = {a.name: {"color": a.color} for a in agents}
+        self.agents_meta = {
+            a.name: {
+                "color": a.color,
+                "nature": a.nature,
+                "big_five": a.big_five.to_dict() if a.big_five else None,
+                "is_observer": False,
+            }
+            for a in agents
+        }
+        # Add observer as +1 agent (non-participating)
+        self.agents_meta["Observer"] = {
+            "color": "#8E8E93",
+            "nature": "observer",
+            "big_five": None,
+            "is_observer": True,
+        }
         self.last_metrics = None
         self.last_hyps = []
 
@@ -142,6 +166,10 @@ def api_start():
         "history": [],
         "metrics_md": None,
         "agents": list(STATE.agents_meta.keys()),
+        "agents_data": [
+            {"name": name, **meta}
+            for name, meta in STATE.agents_meta.items()
+        ],
     })
 
 
@@ -292,6 +320,87 @@ def api_scientific():
     })
 
 
+@app.route("/api/observer", methods=["POST"])
+def api_observer():
+    """Trigger observer agent analysis (methodological triangulation)."""
+    if not STATE.dm or not STATE.observer:
+        return jsonify({"ok": False, "error": "Session not started"}), 400
+
+    history = STATE.dm.history
+    if len(history) < 3:
+        return jsonify({"ok": False, "error": "Need at least 3 turns for observation"}), 400
+
+    # Prepare scientific summary dict if available
+    scientific_dict = None
+    if STATE.last_metrics and "scientific" in STATE.last_metrics:
+        sci = STATE.last_metrics["scientific"]
+        if hasattr(sci, "group_stage"):
+            scientific_dict = {
+                "group_stage": sci.group_stage,
+                "network_density": sci.network_density,
+                "dominant_emotion": sci.dominant_emotion,
+            }
+
+    report = STATE.observer.observe(
+        dialogue_history=history,
+        turn_no=STATE.dm.turn_no,
+        metrics_summary=STATE.last_metrics,
+        scientific_summary=scientific_dict,
+    )
+    STATE.last_observer_report = STATE.observer.render_report(report)
+
+    # Save report to file
+    report_path = OUT_DIR / f"observer_turn_{STATE.dm.turn_no:04d}.md"
+    report_path.write_text(STATE.last_observer_report, encoding="utf-8")
+
+    return jsonify({
+        "ok": True,
+        "report": STATE.last_observer_report,
+        "convergence_score": report.convergence_score,
+        "agreements": report.agreements,
+        "divergences": report.divergences,
+        "novel_insights": report.novel_insights,
+        "triangulation_summary": STATE.observer.get_triangulation_summary(),
+    })
+
+
+@app.route("/api/observer/history", methods=["GET"])
+def api_observer_history():
+    """Get all observer reports and triangulation summary."""
+    if not STATE.observer:
+        return jsonify({"ok": True, "reports": [], "summary": {}})
+    return jsonify({
+        "ok": True,
+        "reports": [STATE.observer.render_report(r) for r in STATE.observer.history],
+        "summary": STATE.observer.get_triangulation_summary(),
+    })
+
+
+@app.route("/api/advanced", methods=["GET"])
+def api_advanced():
+    """Get advanced analytics: emotional contagion, LSM, discourse coherence."""
+    if not STATE.dm or len(STATE.dm.history) < 3:
+        return jsonify({"ok": True, "report": None, "message": "Need at least 3 turns."})
+
+    agents_list = [a.name for a in STATE.dm.agents]
+    result = compute_advanced_analysis(STATE.dm.history, agents_list)
+    report_md = render_advanced_report(result, agents_list)
+
+    return jsonify({
+        "ok": True,
+        "report": report_md,
+        "data": {
+            "contagion_rate": result.emotional_contagion.contagion_rate,
+            "most_contagious": result.emotional_contagion.most_contagious_agent,
+            "most_susceptible": result.emotional_contagion.most_susceptible_agent,
+            "group_lsm": result.language_style_matching.group_lsm,
+            "discourse_coherence": result.discourse_coherence.overall_coherence,
+            "thread_continuity": result.discourse_coherence.thread_continuity,
+            "topic_drift_points": result.discourse_coherence.topic_drift_points,
+        },
+    })
+
+
 @app.route("/download/log")
 def download_log():
     path = LOG_DIR / "dialog.jsonl"
@@ -355,4 +464,4 @@ def create_app() -> Flask:
 
 if __name__ == "__main__":
     # Для локального запуска: python -m agent_dialogue_sim.web_app
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=8080, debug=True)

@@ -13,12 +13,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
-import anthropic
+from openai import OpenAI
 
 from ..config import (
     DEFAULT_AGENTS,
     DEFAULT_ENV_CONTEXT_INDEX,
-    ANTHROPIC_API_KEY,
+    OPENAI_API_KEY,
+    OPENAI_BASE_URL,
     VIZ_EDGE_WINDOW,
 )
 from ..agents import Agent
@@ -28,13 +29,13 @@ from ..analytics import compute_metrics, hypotheses_from_metrics, render_markdow
 
 
 def run_session(turns: int, env_index: int, seed: int | None = None) -> Dict[str, Any]:
-    if not ANTHROPIC_API_KEY:
-        raise RuntimeError("ANTHROPIC_API_KEY is not set")
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY is not set")
 
     if seed is not None:
         random.seed(seed)
 
-    client = anthropic.Anthropic()
+    client = OpenAI(**({"base_url": OPENAI_BASE_URL} if OPENAI_BASE_URL else {}))
     env_context = get_env_context_by_index(env_index)
     agents = [Agent(**cfg) for cfg in DEFAULT_AGENTS]
     dm = DialogueManager(client=client, agents=agents, env_context=env_context, human_io=None)

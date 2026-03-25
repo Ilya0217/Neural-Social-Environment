@@ -862,25 +862,25 @@ class HypothesisValidator:
             
             # Добавляем теоретическое обоснование для некоторых фреймворков
             framework_lower = val.framework.lower()
-            if "centrality" in framework_lower or "sna" in framework_lower:
+            if "centrality" in framework_lower or "sna" in framework_lower or "contractor" in framework_lower or "multidimensional" in framework_lower:
                 lines.append("**Теоретическое обоснование:**")
                 lines.append("")
-                lines.append("Согласно теории анализа социальных сетей (Borgatti et al., 2009), центральность агента определяется количеством прямых связей с другими участниками сети. Агент с высокой центральностью (>70%) играет ключевую роль в коммуникации, выступая как посредник и координатор взаимодействий. Высокая централизация указывает на доминирующую позицию в структуре коммуникации и способность влиять на информационные потоки в группе.")
+                lines.append("Согласно теории мультиплексных сетей в командах (Contractor et al., 2012), центральность агента определяется количеством прямых связей с другими участниками сети. Агент с высокой центральностью (>70%) играет ключевую роль в коммуникации, выступая как посредник и координатор взаимодействий. Высокая централизация указывает на доминирующую позицию в структуре коммуникации и способность влиять на информационные потоки в группе.")
                 lines.append("")
-            elif "network" in framework_lower and ("density" in val.hypothesis_text.lower() or "structural" in val.hypothesis_text.lower()):
+            elif "network" in framework_lower and ("density" in val.hypothesis_text.lower() or "structural" in val.hypothesis_text.lower() or "relational" in framework_lower):
                 lines.append("**Теоретическое обоснование:**")
                 lines.append("")
-                lines.append("Плотность сети (Network Density) отражает долю реальных связей от всех возможных связей между участниками. Низкая плотность (<50%) указывает на наличие структурных дыр (Burt, 2004) — отсутствие прямых связей между некоторыми участниками, что может ограничивать информационный обмен и групповую сплочённость.")
+                lines.append("Плотность сети (Network Density) отражает долю реальных связей от всех возможных связей между участниками. Низкая плотность (<50%) указывает на наличие разрывов в реляционных событиях (Leenders et al., 2016) — отсутствие прямых связей между некоторыми участниками, что может ограничивать информационный обмен и групповую сплочённость.")
                 lines.append("")
-            elif "group development" in framework_lower or "wheelan" in framework_lower or "integrated model" in framework_lower:
+            elif "team" in framework_lower or "shuffler" in framework_lower or "temporal" in framework_lower:
                 lines.append("**Теоретическое обоснование:**")
                 lines.append("")
-                lines.append("Интегрированная модель группового развития (Wheelan, 2009) описывает четыре стадии: формирование (forming), конфликт (storming), нормирование (norming) и продуктивная работа (performing). Каждая стадия характеризуется специфическими паттернами взаимодействия, уровнем конфликта и продуктивности группы.")
+                lines.append("Модель темпоральной динамики команд (Shuffler et al., 2018; Marks et al., 2001) описывает три фазы командных процессов: переходную (transition), действия (action) и межличностную (interpersonal). Каждая фаза характеризуется специфическими паттернами взаимодействия. Мета-анализ Mathieu et al. (2017) подтверждает, что динамика переходов между фазами предсказывает эффективность команды.")
                 lines.append("")
-            elif "social capital" in framework_lower or "structural holes" in framework_lower:
+            elif "network dynamics" in framework_lower or "reagans" in framework_lower or "team chemistry" in framework_lower:
                 lines.append("**Теоретическое обоснование:**")
                 lines.append("")
-                lines.append("Социальный капитал (Burt, 2004) определяется как ресурсы, доступные через социальные связи. Участники с низким сетевым статусом (sociometric status < 0.3) имеют ограниченный доступ к информационным ресурсам группы и могут быть изолированы от основных коммуникационных потоков.")
+                lines.append("Динамика сетей и командная химия (Reagans et al., 2016) определяется структурой и композицией социальных связей. Участники с низким сетевым статусом (sociometric status < 0.3) имеют ограниченный доступ к информационным ресурсам группы и могут быть изолированы от основных коммуникационных потоков.")
                 lines.append("")
             
             lines.append("**Доказательства:**")

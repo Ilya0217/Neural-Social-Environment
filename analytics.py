@@ -1,16 +1,16 @@
 """Analytics for agent dialogue.
 
 Computes windowed and global metrics, renders markdown reports, and generates
-hypotheses based on both heuristic and modern scientific frameworks (1990-2025).
+hypotheses based on both heuristic and modern scientific frameworks (2010-2025).
 
 Scientific foundations integrated from scientific_analytics.py:
-- Social Network Analysis (Borgatti et al., 2009; Barabási & Albert, 1999)
-- Social Capital & Structural Holes (Burt, 2004; Gittell, 2002)
-- ISO 24617-2 Dialogue Act Taxonomy (Bunt et al., 2017)
-- Computational Pragmatics (Clark, 1996; Jurafsky & Martin, 2023)
-- Computer-Mediated Discourse Analysis (Herring, 2004; Androutsopoulos, 2006)
-- Dimensional Emotion Model (Russell & Barrett, 1999; Mohammad & Turney, 2013)
-- Integrated Model of Group Development (Wheelan, 2009; Kozlowski & Ilgen, 2006)
+- Multidimensional Networks in Teams (Contractor et al., 2012)
+- Network Dynamics & Team Performance (Reagans et al., 2016; Leenders et al., 2016)
+- ISO 24617-2 Dialogue Act Taxonomy (Bunt et al., 2020)
+- Computational Dialogue Analysis (Jurafsky & Martin, 2024)
+- Language Style Matching & LIWC (Tausczik & Pennebaker, 2010; Gonzales et al., 2010)
+- High-Dimensional Emotion Model (Cowen & Keltner, 2017; Demszky et al., 2020)
+- Team Temporal Dynamics (Shuffler et al., 2018; Mathieu et al., 2017)
 """
 from __future__ import annotations
 from pathlib import Path
@@ -253,43 +253,43 @@ def render_markdown_report(metrics: Dict[str, Any], turn: int, title: str) -> st
     md.append(f"| Actionable cues, % | {pct(s_win.get('actionability_rate', 0))} | {pct(s_all.get('actionability_rate', 0))} |")
     md.append("")
     
-    # === SCIENTIFIC ANALYSIS SECTION (Modern Frameworks 1990-2025) ===
+    # === SCIENTIFIC ANALYSIS SECTION (Modern Frameworks 2010-2025) ===
     if scientific:
         md.append("---")
         md.append("## 🔬 Scientific Analysis")
         md.append("")
         
-        # Group Development Stage (Wheelan, 2009)
+        # Team Temporal Dynamics (Shuffler et al., 2018)
         stage_data = scientific.group_stage
         if stage_data:
             stage = stage_data.get("stage", "unknown").upper()
             confidence = stage_data.get("confidence", 0)
-            md.append(f"### Group Stage (Wheelan, 2009): **{stage}** ({pct(confidence)} confidence)")
+            md.append(f"### Team Phase (Shuffler et al., 2018): **{stage}** ({pct(confidence)} confidence)")
             md.append("")
         
-        # Network Analysis (Borgatti et al., 2009)
-        md.append("### Network Analysis (Borgatti et al., 2009)")
+        # Network Analysis (Contractor et al., 2012)
+        md.append("### Multidimensional Networks (Contractor et al., 2012)")
         md.append(f"- **Network Density:** {pct(scientific.network_density)}")
         md.append(f"- **Clustering:** {scientific.clustering_coefficient:.2f}")
         md.append("")
         
-        # Social Capital (Burt, 2004)
+        # Network Dynamics (Reagans et al., 2016)
         social_cap = scientific.social_capital
         if social_cap:
-            md.append(f"### Relational Coordination (Gittell, 2002): {pct(social_cap.get('group_cohesion', 0))}")
+            md.append(f"### Network Dynamics (Reagans et al., 2016): {pct(social_cap.get('group_cohesion', 0))}")
             md.append("")
         
-        # Dialogue Act Profile (ISO 24617-2, Bunt et al., 2017)
+        # Dialogue Act Profile (ISO 24617-2, Bunt et al., 2020)
         dialogue_acts = scientific.dialogue_act_profile
         if dialogue_acts:
-            md.append("### Dialogue Acts (ISO 24617-2, Bunt et al., 2017)")
+            md.append("### Dialogue Acts (ISO 24617-2, Bunt et al., 2020)")
             md.append(f"- **Task-oriented:** {pct(dialogue_acts.get('task_ratio', 0))}")
             md.append(f"- **Socio-emotional:** {pct(dialogue_acts.get('socio_ratio', 0))}")
             md.append(f"- **Positive/Negative ratio:** {dialogue_acts.get('positive_negative_ratio', 0):.2f}")
             md.append("")
         
-        # Emotional Climate (Russell & Barrett, 1999)
-        md.append(f"### Emotional Climate (Russell & Barrett, 1999): **{scientific.dominant_emotion.title()}**")
+        # Emotional Climate (Cowen & Keltner, 2017)
+        md.append(f"### Emotional Climate (Cowen & Keltner, 2017): **{scientific.dominant_emotion.title()}**")
         emotions = scientific.emotion_distribution
         if emotions:
             top_emotions = sorted(emotions.items(), key=lambda x: -x[1])[:3]
@@ -298,10 +298,10 @@ def render_markdown_report(metrics: Dict[str, Any], turn: int, title: str) -> st
                 md.append(f"Top emotions: {emotions_str}")
         md.append("")
         
-        # Turn-Taking (Herring, 2004)
+        # Turn-Taking (Gonzales et al., 2010; Tausczik & Pennebaker, 2010)
         turn_data = scientific.turn_taking
         if turn_data:
-            md.append("### Turn-Taking (CMDA, Herring, 2004)")
+            md.append("### Turn-Taking (Gonzales et al., 2010; Tausczik & Pennebaker, 2010)")
             md.append(f"- **Inequality (Gini):** {turn_data.get('turn_inequality_gini', 0):.2f}")
             md.append(f"- **Adjacency completion:** {pct(turn_data.get('adjacency_completion_rate', 0))}")
             md.append("")

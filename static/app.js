@@ -103,12 +103,11 @@ tabBtns.forEach(btn => {
     btn.classList.add('active');
     
     // Update tab visibility
-    if (tabName === 'dialogue') {
-      dialogueTab.classList.add('active');
-      scientificTab.classList.remove('active');
-    } else if (tabName === 'scientific') {
-      dialogueTab.classList.remove('active');
-      scientificTab.classList.add('active');
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+    const targetTab = document.getElementById(tabName + 'Tab');
+    if (targetTab) {
+      targetTab.classList.add('active');
+      targetTab.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
   });
 });
@@ -330,6 +329,29 @@ async function startSession() {
   
   statusEl.textContent = 'Initializing session...';
   
+  // Show loading overlay
+  const loadingEl = document.createElement('div');
+  loadingEl.className = 'loading-overlay';
+  loadingEl.innerHTML = `
+    <div class="loading-spinner"></div>
+    <div class="loading-text">Generating agent profiles via LLM</div>
+    <div class="loading-agent" id="loadingAgent">Initializing<span class="loading-dots"><span></span><span></span><span></span></span></div>
+  `;
+  document.body.appendChild(loadingEl);
+  
+  // Animate agent names in loading
+  const agentNames = agents.map(a => `${a.name} (${a.nature})`);
+  let loadIdx = 0;
+  const loadingInterval = setInterval(() => {
+    const el = document.getElementById('loadingAgent');
+    if (el && loadIdx < agentNames.length) {
+      el.innerHTML = `${agentNames[loadIdx]}<span class="loading-dots"><span></span><span></span><span></span></span>`;
+      loadIdx++;
+    } else if (el) {
+      el.innerHTML = `Finalizing<span class="loading-dots"><span></span><span></span><span></span></span>`;
+    }
+  }, 2500);
+  
   try {
     const data = await api('/api/start', 'POST', {
       env_index: envIndex,
@@ -340,6 +362,9 @@ async function startSession() {
         questionnaire: a.questionnaire
       }))
     });
+    
+    clearInterval(loadingInterval);
+    loadingEl.remove();
     
     if (!data.ok) throw new Error(data.error || 'Failed to start session');
     
@@ -357,6 +382,9 @@ async function startSession() {
     renderHistory([]);
     renderHyps([]);
     graphImg.src = '';
+    graphImg.style.display = 'none';
+    const gp = document.getElementById('graphPlaceholder');
+    if (gp) gp.style.display = 'flex';
     renderMetrics('');
     renderScientificReport('');
     renderScientificHypotheses([]);
@@ -369,11 +397,19 @@ async function startSession() {
     // Switch to dialogue tab
     tabBtns.forEach(b => b.classList.remove('active'));
     document.querySelector('.tab-btn[data-tab="dialogue"]').classList.add('active');
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
     dialogueTab.classList.add('active');
-    scientificTab.classList.remove('active');
+    
+    // Use agents_data if available (includes big_five)
+    if (data.agents_data) {
+      agents = data.agents_data;
+      renderAgentBadges();
+    }
     
     statusEl.textContent = 'Session started. Click "Next message".';
   } catch (e) {
+    clearInterval(loadingInterval);
+    loadingEl.remove();
     console.error(e);
     statusEl.textContent = 'Start error: ' + e.message;
   }
@@ -383,12 +419,30 @@ function renderAgentBadges() {
   agentBadgesEl.innerHTML = '';
   agents.forEach(agent => {
     const badge = document.createElement('div');
-    badge.className = 'agent-badge';
+    const isObs = agent.is_observer;
+    badge.className = 'agent-badge' + (isObs ? ' agent-badge-observer' : '');
+    const b5 = agent.big_five;
+    const b5Tooltip = b5 
+      ? `O:${b5.openness} C:${b5.conscientiousness} E:${b5.extraversion} A:${b5.agreeableness} N:${b5.neuroticism}`
+      : '';
+    const b5Html = b5
+      ? `<span class="agent-badge-b5" title="Big Five (OCEAN)">
+          <span class="b5-bar" style="--val:${b5.openness}" title="Openness ${b5.openness}">O</span>
+          <span class="b5-bar" style="--val:${b5.conscientiousness}" title="Conscientiousness ${b5.conscientiousness}">C</span>
+          <span class="b5-bar" style="--val:${b5.extraversion}" title="Extraversion ${b5.extraversion}">E</span>
+          <span class="b5-bar" style="--val:${b5.agreeableness}" title="Agreeableness ${b5.agreeableness}">A</span>
+          <span class="b5-bar" style="--val:${b5.neuroticism}" title="Neuroticism ${b5.neuroticism}">N</span>
+        </span>`
+      : '';
+    const obsIcon = isObs ? '🔭 ' : '';
     badge.innerHTML = `
-      <div class="agent-badge-dot" style="background: ${agent.color}"></div>
-      <span class="agent-badge-name">${agent.name}</span>
+      <div class="agent-badge-dot" style="background:${agent.color}${isObs ? ';opacity:.5' : ''}"></div>
+      <span class="agent-badge-name">${obsIcon}${agent.name}</span>
       <span class="agent-badge-nature">(${agent.nature})</span>
+      ${b5Html}
     `;
+    if (b5Tooltip) badge.title = `Big Five: ${b5Tooltip}`;
+    if (isObs) badge.title = 'Non-participating observer agent (methodological triangulation)';
     agentBadgesEl.appendChild(badge);
   });
 }
@@ -405,10 +459,17 @@ function renderHistory(history) {
     const agent = agents.find(a => a.name === r.speaker);
     const color = agent ? agent.color : '#6b7a94';
     
+    const toneColor = r.tone === 'positive' ? 'var(--tone-positive)' 
+                   : r.tone === 'negative' ? 'var(--tone-negative)' 
+                   : 'var(--tone-neutral)';
+    item.style.borderLeftColor = color;
     item.innerHTML = `
       <div class="meta">
-        <span style="color: ${color}; font-weight: 600;">[${r.turn}] ${r.speaker}</span>
-        → ${tgt} · tone: ${r.tone} · emotion: ${r.emotion}
+        <span class="speaker" style="color:${color}">${r.speaker}</span>
+        <span class="arrow">→</span>
+        <span class="target">${tgt}</span>
+        <span class="tone-dot" style="background:${toneColor}"></span>
+        <span class="tone-label">${r.emotion}</span>
       </div>
       <div class="text">${escapeHtml(r.reply)}</div>
     `;
@@ -622,6 +683,9 @@ stepBtn.addEventListener('click', async () => {
     
     if (data.image_url) {
       graphImg.src = data.image_url + '?t=' + Date.now();
+      graphImg.style.display = 'block';
+      const placeholder = document.getElementById('graphPlaceholder');
+      if (placeholder) placeholder.style.display = 'none';
     }
     if (data.hypotheses) {
       renderHyps(data.hypotheses);
@@ -654,11 +718,104 @@ stepBtn.addEventListener('click', async () => {
 // Helper function to check and show validation button
 function checkValidationButton(data) {
   if (downloadValidationBtn) {
-    // Показываем кнопку, если есть отчёт в ответе ИЛИ есть сохранённые файлы
     if (data && (data.validation_report || data.has_validation_report)) {
       downloadValidationBtn.style.display = 'inline-block';
     } else {
       downloadValidationBtn.style.display = 'none';
     }
   }
+}
+
+// ==================== ADVANCED ANALYTICS ====================
+const loadAdvancedBtn = document.getElementById('loadAdvancedBtn');
+if (loadAdvancedBtn) {
+  loadAdvancedBtn.addEventListener('click', async () => {
+    loadAdvancedBtn.disabled = true;
+    loadAdvancedBtn.textContent = 'Loading...';
+    try {
+      const res = await fetch('/api/advanced');
+      const data = await res.json();
+      const reportDiv = document.getElementById('advancedReport');
+      const metricsDiv = document.getElementById('advancedMetrics');
+      if (data.ok && data.report) {
+        reportDiv.innerHTML = renderMarkdown(data.report);
+        const d = data.data || {};
+        let html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:1rem;">';
+        html += `<div class="stat-card"><div class="stat-value">${(d.contagion_rate*100||0).toFixed(0)}%</div><div class="stat-label">Contagion Rate</div></div>`;
+        html += `<div class="stat-card"><div class="stat-value">${(d.group_lsm||0).toFixed(2)}</div><div class="stat-label">Group LSM</div></div>`;
+        html += `<div class="stat-card"><div class="stat-value">${(d.discourse_coherence||0).toFixed(2)}</div><div class="stat-label">Coherence</div></div>`;
+        html += `<div class="stat-card"><div class="stat-value">${((d.thread_continuity||0)*100).toFixed(0)}%</div><div class="stat-label">Thread Continuity</div></div>`;
+        html += '</div>';
+        if (d.most_contagious) html += `<p style="padding:0 1rem;font-size:12px;color:var(--text-dim)">Most contagious: <strong>${d.most_contagious}</strong></p>`;
+        if (d.most_susceptible) html += `<p style="padding:0 1rem;font-size:12px;color:var(--text-dim)">Most susceptible: <strong>${d.most_susceptible}</strong></p>`;
+        if (d.topic_drift_points && d.topic_drift_points.length) html += `<p style="padding:0 1rem;font-size:12px;color:var(--tone-negative)">Topic drift at turns: ${d.topic_drift_points.join(', ')}</p>`;
+        metricsDiv.innerHTML = html;
+      } else {
+        reportDiv.innerHTML = `<p style="color:var(--text-secondary);padding:2rem;">${data.message || 'No data'}</p>`;
+      }
+    } catch(e) { console.error(e); }
+    loadAdvancedBtn.disabled = false;
+    loadAdvancedBtn.textContent = 'Load Analysis';
+  });
+}
+
+// ==================== OBSERVER AGENT ====================
+const runObserverBtn = document.getElementById('runObserverBtn');
+if (runObserverBtn) {
+  runObserverBtn.addEventListener('click', async () => {
+    runObserverBtn.disabled = true;
+    runObserverBtn.textContent = 'Analyzing...';
+    try {
+      const res = await fetch('/api/observer', { method: 'POST' });
+      const data = await res.json();
+      const reportDiv = document.getElementById('observerReport');
+      const summaryDiv = document.getElementById('triangulationSummary');
+      if (data.ok && data.report) {
+        reportDiv.innerHTML = renderMarkdown(data.report);
+        // Render triangulation summary
+        const s = data.triangulation_summary || {};
+        let html = '<div style="padding: 1rem;">';
+        html += `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin-bottom:1.5rem;">`;
+        html += `<div class="stat-card"><div class="stat-value">${(data.convergence_score * 100).toFixed(0)}%</div><div class="stat-label">Convergence</div></div>`;
+        html += `<div class="stat-card"><div class="stat-value">${(data.agreements || []).length}</div><div class="stat-label">Agreements</div></div>`;
+        html += `<div class="stat-card"><div class="stat-value">${(data.divergences || []).length}</div><div class="stat-label">Divergences</div></div>`;
+        html += `</div>`;
+        if (data.novel_insights && data.novel_insights.length) {
+          html += '<h3>Novel Insights</h3><ul>';
+          data.novel_insights.forEach(i => html += `<li>${i}</li>`);
+          html += '</ul>';
+        }
+        if (s.observations > 1) {
+          html += `<h3>Longitudinal Trend</h3>`;
+          html += `<p>Observations: ${s.observations} | Avg convergence: ${(s.avg_convergence * 100).toFixed(0)}%</p>`;
+          html += `<p>Range: ${(s.min_convergence * 100).toFixed(0)}% – ${(s.max_convergence * 100).toFixed(0)}%</p>`;
+        }
+        html += '</div>';
+        summaryDiv.innerHTML = html;
+      } else {
+        reportDiv.innerHTML = `<p style="color:var(--text-secondary);padding:2rem;">${data.error || 'No data'}</p>`;
+      }
+    } catch(e) {
+      console.error(e);
+    }
+    runObserverBtn.disabled = false;
+    runObserverBtn.textContent = 'Run Observer Analysis';
+  });
+}
+
+// Simple markdown to HTML renderer
+function renderMarkdown(md) {
+  if (!md) return '';
+  return md
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/^- (.+)$/gm, '<li>$1</li>')
+    .replace(/(<li>.*<\/li>)/gs, '<ul>$1</ul>')
+    .replace(/^---$/gm, '<hr>')
+    .replace(/\n\n/g, '</p><p>')
+    .replace(/\n/g, '<br>')
+    .replace(/^(.+)$/gm, (m) => m.startsWith('<') ? m : `<p>${m}</p>`);
 }
