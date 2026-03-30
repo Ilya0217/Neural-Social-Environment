@@ -2,6 +2,8 @@
 from pathlib import Path
 from typing import List, Dict, Any, Tuple
 import math
+import matplotlib
+matplotlib.use("Agg")  # Non-interactive backend for thread safety
 import networkx as nx
 import matplotlib.pyplot as plt
 from matplotlib import colors as mcolors
@@ -9,15 +11,15 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from matplotlib import gridspec
 
-# === Палитры ===
+# Palettes and color helpers
 TONE_SCORE = {"positive": 1.0, "neutral": 0.0, "negative": -1.0}
 
-# цвета для тонов (края шкалы + нейтральный центр)
+# tone colors (scale ends + neutral center)
 C_POS = "#10b981"  # зелёный
 C_NEU = "#9ca3af"  # серый
 C_NEG = "#ef4444"  # красный
 
-# цвета для эмоций (обводка узла)
+# emotion colors (node outline)
 EMOTION_COLOR = {
     "calm": "#60a5fa",       # голубой
     "curious": "#a78bfa",    # фиолетовый
@@ -33,7 +35,7 @@ def _to_rgb(hex_color: str) -> Tuple[float, float, float]:
     return mcolors.to_rgb(hex_color)
 
 def _blend(c1: str, c2: str, t: float) -> str:
-    """Линейная интерполяция по t ∈ [0,1] между двумя цветами."""
+    """Linear interpolation for t ∈ [0,1] between two hex colors."""
     r1, g1, b1 = _to_rgb(c1)
     r2, g2, b2 = _to_rgb(c2)
     r = r1 + (r2 - r1) * t
@@ -51,12 +53,7 @@ def tone_to_color(avg_score: float) -> str:
     return _blend(C_NEG, C_NEU, t)
 
 def compute_stats(agents_meta: Dict[str, Dict[str, str]], history: List[Dict[str, Any]], window: int):
-    """
-    Считаем метрики по истории.
-    Возвращает:
-    - nodes: dict с метриками по узлам
-    - edges: dict с метриками по рёбрам за последние `window` ходов
-    """
+    """Compute node-level and windowed edge metrics from history."""
     agents = list(agents_meta.keys())
     # --- Node‑level ---
     talks = {a: 0 for a in agents}
@@ -89,7 +86,7 @@ def compute_stats(agents_meta: Dict[str, Dict[str, str]], history: List[Dict[str
             "emotion": last_emotion.get(a, "neutral"),
         }
 
-    # --- Edge‑level (по окну последних window реплик) ---
+    # --- Edge‑level (last `window` messages) ---
     last = history[-window:] if window > 0 else history[:]
     edge_counts = {}
     edge_tone_sum = {}
@@ -120,23 +117,22 @@ def draw_interactions_pro(
     top_edge_labels: int = 6,
     per_message_edges: bool = True,
 ):
-    """
-    Крутая визуализация:
-    - Узлы: размер ~ числу сообщений, цвет заполнения — из агента, обводка — по последней эмоции.
-    - Рёбра: цвет = средний тон (-1..1), ширина ~ частоте за окно; кривизна для обратных рёбер.
-    - Метрики и легенда в правой панели.
+    """Visualization:
+    - Nodes: size ~ #messages, fill from agent color, outline by last emotion.
+    - Edges: color = avg tone (-1..1), width ~ frequency within window; curvature for reverse pairs.
+    - Metrics and legend in the right panel.
     """
     agents = list(agents_meta.keys())
     if not agents or not history:
-        # ... (пустая заготовка, как было)
+        # placeholder when insufficient data
         plt.figure(figsize=(10, 6))
         plt.title(title)
-        plt.text(0.5, 0.5, "Недостаточно данных для графа", ha="center", va="center")
+        plt.text(0.5, 0.5, "Not enough data to draw graph", ha="center", va="center")
         plt.savefig(out_path, dpi=160)
         plt.close()
         return
 
-    # --- Метрики по узлам (как раньше)
+    # --- Node metrics
     node_stats, edge_stats_agg = compute_stats(agents_meta, history, window)
 
     # --- Граф узлов
@@ -145,14 +141,14 @@ def draw_interactions_pro(
         G.add_node(a)
     pos = nx.spring_layout(G, seed=seed, k=1.2) if len(agents) > 2 else nx.circular_layout(G)
 
-    # --- Фигура: граф + панель метрик
+    # --- Figure: graph + metrics panel
     fig = plt.figure(figsize=(12.5, 7.5))
     gs = gridspec.GridSpec(1, 2, width_ratios=[2.2, 1.0], figure=fig, wspace=0.05)
     ax = fig.add_subplot(gs[0])
     ax_stats = fig.add_subplot(gs[1])
     ax.set_title(title, fontsize=12, pad=10)
 
-    # --- Узлы (как было)
+    # --- Nodes
     base_node_size = 1200
     sizes, facecolors, edgecolors, linewidths = [], [], [], []
     for a in agents:
@@ -182,13 +178,13 @@ def draw_interactions_pro(
         labels[a] = f"{a}\n{ns['talks']} репл. · out:{ns['out']} in:{ns['in']}"
     nx.draw_networkx_labels(G, pos, labels=labels, font_size=9, font_weight="bold", ax=ax)
 
-    # === Рёбра ===
+    # === Edges ===
     if per_message_edges:
-        # КАЖДАЯ реплика за последние `window` ходов — отдельная стрелка
+        # Each message in the last `window` turns is a separate arrow
         last = history[-window:] if window > 0 else history[:]
-        # слегка разводим параллельные стрелки по дуге
+        # spread parallel arrows slightly via arc radius
         def arc_for(i: int) -> float:
-            # 0.02..0.22 с периодом, чтобы дуги не слипались
+            # 0.02..0.22 periodic to avoid overlapping arcs
             return 0.02 + (i % 5) * 0.05
 
         drawn = 0
@@ -205,15 +201,15 @@ def draw_interactions_pro(
                 G, pos,
                 edgelist=[(src, dst)],
                 arrows=True,
-                arrowstyle="-|>",      # заметная «голова» стрелки
-                arrowsize=26,          # увеличенный размер головы
+                arrowstyle="-|>",
+                arrowsize=26,
                 width=1.8,
                 edge_color=col,
                 connectionstyle=f"arc3,rad={rad}",
                 ax=ax,
                 alpha=0.95,
-                min_source_margin=18,  # отступ от узла-источника
-                min_target_margin=18,  # отступ от узла-цели
+                min_source_margin=18,
+                min_target_margin=18,
             )
             # ↑ функция возвращает список Patch-объектов
             if arts:
@@ -222,9 +218,9 @@ def draw_interactions_pro(
                     a.set_clip_on(False) # не обрезать голову стрелки
             drawn += 1
 
-        # подписи к топ-рёбрам здесь не нужны
+        # no top-edge labels in per-message mode
     else:
-        # СТАРЫЙ режим: агрегирование и подписи к самым «сильным» рёбрам
+        # Aggregated mode: label strongest edges
         reversed_pairs = set()
         for (u, v) in edge_stats_agg.keys():
             if (v, u) in edge_stats_agg:
@@ -241,22 +237,22 @@ def draw_interactions_pro(
             e = nx.draw_networkx_edges(
                 G, pos, edgelist=[(src, dst)],
                 arrows=True,
-                arrowstyle="-|>",          # заметная голова стрелки
-                arrowsize=24,              # ↑ размер головы (px)
-                width=1.8,                 # толщина линии
+                arrowstyle="-|>",
+                arrowsize=24,
+                width=1.8,
                 edge_color=col,
                 connectionstyle=f"arc3,rad={rad}",
                 ax=ax,
                 alpha=0.95,
-                min_source_margin=18,      # ↑ больше отступ от узла-источника
-                min_target_margin=18,      # ↑ больше отступ от узла-цели
-                zorder=3,                  # рисуем поверх узлов/подложки
-                clip_on=False,             # не клиповать голову стрелки
+                min_source_margin=18,
+                min_target_margin=18,
+                zorder=3,
+                clip_on=False,
             )
             if e:
                 drawn_edges.append(((u, v), cnt, score, col))
 
-        # подписи к топ-рёбрам
+        # labels for strongest edges
         top = drawn_edges[:top_edge_labels]
         for (u, v), cnt, score, col in top:
             x = (pos[u][0] + pos[v][0]) / 2
@@ -266,33 +262,33 @@ def draw_interactions_pro(
 
     ax.axis("off")
 
-    # === Правая панель
+    # === Right panel
     ax_stats.set_facecolor("#fcfcfd")
 
-    # Топ говорящих (как было)
+    # Top speakers
     top_speakers = sorted(agents, key=lambda a: node_stats[a]["talks"], reverse=True)
     y = list(reversed(top_speakers))
     x = [node_stats[a]["talks"] for a in y]
     bar_colors = [agents_meta[a].get("color", "#888") for a in y]
     ax_stats.barh(y, x, color=bar_colors, edgecolor="#374151")
-    ax_stats.set_xlabel("сообщений")
-    ax_stats.set_title("Кто больше говорит", fontsize=10)
+    ax_stats.set_xlabel("messages")
+    ax_stats.set_title("Who speaks more", fontsize=10)
 
-    # Текст: уточняем легенду под новый режим
+    # Legend text for mode
     if per_message_edges:
-        ax_stats.text(0.0, -0.15, f"Стрелки: каждое сообщение за последние {window} ходов", transform=ax_stats.transAxes, fontsize=9)
+        ax_stats.text(0.0, -0.15, f"Arrows: each message in the last {window} turns", transform=ax_stats.transAxes, fontsize=9)
     else:
-        ax_stats.text(0.0, -0.15, f"Агрегация рёбер за последние {window} ходов", transform=ax_stats.transAxes, fontsize=9)
+        ax_stats.text(0.0, -0.15, f"Aggregated edges over the last {window} turns", transform=ax_stats.transAxes, fontsize=9)
 
     ax_stats.grid(axis="x", alpha=0.25)
     ax_stats.set_axisbelow(True)
 
     legend_elems = [
-        Line2D([0], [0], color=C_NEG, lw=3, label="негативная тональность"),
-        Line2D([0], [0], color=C_NEU, lw=3, label="нейтральная"),
-        Line2D([0], [0], color=C_POS, lw=3, label="позитивная"),
-        Patch(facecolor="#ffffff", edgecolor="#111827", label="обводка узла = последняя эмоция"),
-        Line2D([0], [0], color="#111111", lw=2, marker='>', markersize=8, label="стрелка = 1 реплика"),
+        Line2D([0], [0], color=C_NEG, lw=3, label="negative tone"),
+        Line2D([0], [0], color=C_NEU, lw=3, label="neutral"),
+        Line2D([0], [0], color=C_POS, lw=3, label="positive"),
+        Patch(facecolor="#ffffff", edgecolor="#111827", label="node outline = last emotion"),
+        Line2D([0], [0], color="#111111", lw=2, marker='>', markersize=8, label="arrow = 1 message"),
     ]
     ax_stats.legend(handles=legend_elems, loc="lower right", frameon=True)
 

@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agent Dialogue — Web</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- ==================== SETUP WIZARD ==================== -->
+    <div id="setupWizard" class="wizard-overlay">
+        <div class="wizard-container">
+            <!-- Step 1: Agent Count -->
+            <div id="step1" class="wizard-step active">
+                <div class="wizard-header">
+                    <div class="wizard-icon">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <circle cx="12" cy="8" r="4"/>
+                            <path d="M4 20c0-4 4-6 8-6s8 2 8 6"/>
+                            <circle cx="20" cy="6" r="2" stroke-dasharray="2 2"/>
+                            <circle cx="4" cy="6" r="2" stroke-dasharray="2 2"/>
+                        </svg>
+                    </div>
+                    <h1>Agent Dialogue Simulator</h1>
+                    <p class="wizard-subtitle">Configure your multi-agent conversation</p>
+                </div>
+
+                <div class="wizard-content">
+                    <label class="wizard-label">Number of participants</label>
+                    <div class="slider-container">
+                        <input type="range" id="agentCountSlider" class="agent-slider" min="2" max="20" value="3">
+                        <div class="slider-value"><span id="sliderValue">3</span> agents</div>
+                    </div>
+
+                    <label class="wizard-label" style="margin-top: 28px;">Environment context</label>
+                    <select id="wizardEnvSelect" class="wizard-select">
+                        {% for e in envs %}
+                            <option value="{{ loop.index0 }}">{{ e }}</option>
+                        {% endfor %}
+                    </select>
+
+                    <label class="wizard-label" style="margin-top: 28px; display: flex; align-items: center; gap: 12px; cursor: pointer;">
+                        <input type="checkbox" id="joinAsParticipant" checked style="width: 18px; height: 18px; accent-color: var(--accent);">
+                        Join as participant
+                    </label>
+                    <p class="wizard-hint" style="margin-top: 4px; font-size: 12px; color: var(--text-dim);">You will appear as "User" in the dialogue. Agents can address you.</p>
+                </div>
+
+                <div class="wizard-actions">
+                    <button id="toStep2Btn" class="wizard-btn wizard-btn-primary">
+                        Configure Agents
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M5 12h14M12 5l7 7-7 7"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Step 2: Agent Configuration -->
+            <div id="step2" class="wizard-step">
+                <div class="wizard-header compact">
+                    <div class="step-indicator">
+                        <span class="step-badge">Agent <span id="currentAgentNum">1</span> of <span id="totalAgentNum">3</span></span>
+                    </div>
+                    <h2 id="agentConfigTitle">Configure Agent</h2>
+                </div>
+
+                <div class="wizard-content-scroll">
+                    <div class="wizard-content agent-form">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Name</label>
+                                <input type="text" id="agentName" class="wizard-input" placeholder="e.g., Alex, Jordan...">
+                            </div>
+                        <div class="form-group">
+                            <label>Role / Nature</label>
+                            <input type="text" id="agentNature" class="wizard-input" placeholder="e.g., Explorer, Critic, Scientist, Manager...">
+                        </div>
+                            <div class="form-group color-group">
+                                <label>Color</label>
+                                <input type="color" id="agentColor" class="wizard-color" value="#6d9df4">
+                            </div>
+                        </div>
+
+                        <div class="questionnaire">
+                            <h3 class="questionnaire-title">Social Characteristics Research Questionnaire</h3>
+                            <p class="questionnaire-hint">Answer these questions to define social behavior patterns. Leave blank for defaults based on role.</p>
+
+                            <div class="questionnaire-section">
+                                <h4 class="section-title">Basic Information</h4>
+                                <div class="form-group">
+                                    <label>Professional/Educational Background</label>
+                                    <input type="text" id="q_background" class="wizard-input" placeholder="e.g., third-year student, former designer, researcher with AI experience...">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>What motivates you most in group discussions?</label>
+                                    <input type="text" id="q_motivation" class="wizard-input" placeholder="e.g., finding new ideas, preventing errors, achieving consensus...">
+                                </div>
+                            </div>
+
+                            <div class="questionnaire-section">
+                                <h4 class="section-title">Social Behavior Patterns</h4>
+                                <div class="form-group">
+                                    <label>How do you typically behave in a group?</label>
+                                    <input type="text" id="q_social_style" class="wizard-input" placeholder="e.g., speak up first, prefer listening, seek compromises, ask many questions...">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>How do you react to disagreements in the group?</label>
+                                    <input type="text" id="q_conflict_approach" class="wizard-input" placeholder="e.g., openly disagree, seek compromise, change topic, analyze causes...">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>How do you make decisions in a group?</label>
+                                    <input type="text" id="q_decision_style" class="wizard-input" placeholder="e.g., quickly propose options, think long, consult others, rely on data...">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>How much do you trust others' opinions?</label>
+                                    <input type="text" id="q_trust_level" class="wizard-input" placeholder="e.g., usually trust, verify facts, skeptical, trust experts...">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>How do you prefer to work with others?</label>
+                                    <input type="text" id="q_cooperation_style" class="wizard-input" placeholder="e.g., actively collaborate, work independently, compete for ideas, support others...">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>How openly do you express emotions in a group?</label>
+                                    <input type="text" id="q_emotional_openness" class="wizard-input" placeholder="e.g., very openly, reserved, only positive, analytically without emotions...">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>How do you behave in group leadership situations?</label>
+                                    <input type="text" id="q_leadership_tendency" class="wizard-input" placeholder="e.g., often take initiative, support leader, work in background, coordinate process...">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>How do you react to criticism of your ideas?</label>
+                                    <input type="text" id="q_criticism_reaction" class="wizard-input" placeholder="e.g., defend, analyze constructively, accept calmly, seek compromise...">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>What's important to you in group dynamics?</label>
+                                    <input type="text" id="q_group_dynamics" class="wizard-input" placeholder="e.g., everyone should be heard, efficiency matters, need structure, atmosphere is key...">
+                                </div>
+                            </div>
+
+                            <div class="questionnaire-section">
+                                <h4 class="section-title">Communication Style</h4>
+                                <div class="form-group">
+                                    <label>Speech habits, quirks, or small grammatical errors?</label>
+                                    <input type="text" id="q_speech_flaws" class="wizard-input" placeholder="e.g., skip articles, say 'kinda', use jargon, filler words...">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Favorite topics you often bring up?</label>
+                                    <input type="text" id="q_favorite_topics" class="wizard-input" placeholder="e.g., practical experiments, risks and problems, shared goals, data and metrics...">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>How do you react when discussion gets stuck or tense?</label>
+                                    <input type="text" id="q_stress_reaction" class="wizard-input" placeholder="e.g., make a joke, pause, point out problem, suggest structure...">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Signature phrase you often use?</label>
+                                    <input type="text" id="q_signature_phrase" class="wizard-input" placeholder="e.g., 'Let's check', 'What if...', 'Listen, we need...'">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="wizard-actions">
+                    <button id="backToStep1Btn" class="wizard-btn wizard-btn-secondary">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M19 12H5M12 19l-7-7 7-7"/>
+                        </svg>
+                        Back
+                    </button>
+                    <button id="prevAgentBtn" class="wizard-btn wizard-btn-secondary" style="display: none;">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M19 12H5M12 19l-7-7 7-7"/>
+                        </svg>
+                        Prev
+                    </button>
+                    <button id="nextAgentBtn" class="wizard-btn wizard-btn-primary">
+                        Next Agent
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M5 12h14M12 5l7 7-7 7"/>
+                        </svg>
+                    </button>
+                    <button id="startDialogueBtn" class="wizard-btn wizard-btn-success" style="display: none;">
+                        Start Dialogue
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polygon points="5 3 19 12 5 21 5 3"/>
+                        </svg>
+                    </button>
+                </div>
+
+                <!-- Agent preview cards -->
+                <div id="agentPreview" class="agent-preview">
+                    <h4>Configured Agents</h4>
+                    <div id="agentCards" class="agent-cards"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== MAIN DIALOGUE INTERFACE ==================== -->
+    <div id="mainApp" class="container" data-env-count="{{ envs|length }}" style="display: none;">
+        <header class="header">
+            <div>
+                <h1>Agent Dialogue</h1>
+                <p class="subtitle">Graphs and hypotheses update every 5 messages</p>
+            </div>
+            <div class="controls">
+                <button id="newSessionBtn" class="btn">New Session</button>
+                <button id="participateBtn" class="btn btn-participate" style="display: none;">Participate</button>
+                <button id="stepBtn" class="btn btn-primary" disabled>Next message</button>
+                <a class="btn btn-download" id="downloadLog" href="/download/log">Download JSONL</a>
+                <a class="btn" id="downloadLogMd" href="/download/log_md">Download MD</a>
+            </div>
+        </header>
+
+        <!-- Agent badges -->
+        <div id="agentBadges" class="agent-badges"></div>
+
+        <!-- Tab navigation for analysis views -->
+        <div class="tab-nav">
+            <button class="tab-btn active" data-tab="dialogue">💬 Dialogue</button>
+            <button class="tab-btn" data-tab="scientific">🔬 Scientific Analysis</button>
+            <button class="tab-btn" data-tab="advanced">📈 Advanced Analytics</button>
+            <button class="tab-btn" data-tab="observer">🔭 Observer Agent</button>
+        </div>
+
+        <!-- DIALOGUE TAB -->
+        <main id="dialogueTab" class="grid tab-content active">
+            <section class="panel transcript">
+                <h2>Transcript</h2>
+                <div id="typing" class="typing" style="display:none;">
+                    <span>Agent is typing</span>
+                    <span class="dots"><i>.</i><i>.</i><i>.</i></span>
+                </div>
+                <div id="transcript" class="scroll"></div>
+            </section>
+
+            <section class="panel graph">
+                <h2>Interaction graph</h2>
+                <div class="img-wrap">
+                    <div id="graphPlaceholder" class="graph-placeholder">
+                        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.2">
+                            <circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/>
+                            <circle cx="12" cy="18" r="2"/><circle cx="6" cy="14" r="2"/>
+                            <line x1="7.5" y1="7" x2="11" y2="16.5" opacity="0.5"/>
+                            <line x1="16.5" y1="7" x2="13" y2="16.5" opacity="0.5"/>
+                            <line x1="6" y1="8" x2="6" y2="12" opacity="0.5"/>
+                            <line x1="8" y1="6" x2="16" y2="6" opacity="0.3"/>
+                        </svg>
+                        <span>Graph appears after 5 messages</span>
+                    </div>
+                    <img id="graphImg" src="" alt="Graph" style="display:none;" />
+                </div>
+            </section>
+
+            <section class="panel insights">
+                <h2>Hypotheses</h2>
+                <ul id="hyps" class="list"></ul>
+            </section>
+
+            <section class="panel metrics">
+                <h2>Metrics</h2>
+                <div id="metrics" class="scroll"></div>
+            </section>
+        </main>
+
+        <!-- SCIENTIFIC ANALYSIS TAB -->
+        <main id="scientificTab" class="scientific-grid tab-content">
+            <section class="panel scientific-report">
+                <h2>🔬 Scientific Analysis Report</h2>
+                <div class="scientific-info">
+                    <p>This analysis is based on modern scientific frameworks (2010-2025):</p>
+                    <ul>
+                        <li><strong>Multidimensional Networks in Teams</strong> — Contractor et al. (2012)</li>
+                        <li><strong>Network Dynamics & Team Performance</strong> — Reagans et al. (2016); Leenders et al. (2016)</li>
+                        <li><strong>Dialogue Act Taxonomy</strong> — ISO 24617-2, Bunt et al. (2020)</li>
+                        <li><strong>Computational Dialogue Analysis</strong> — Jurafsky & Martin (2024)</li>
+                        <li><strong>Language Style Matching & LIWC</strong> — Tausczik & Pennebaker (2010); Gonzales et al. (2010)</li>
+                        <li><strong>High-Dimensional Emotion Model</strong> — Cowen & Keltner (2017); Demszky et al. (2020)</li>
+                        <li><strong>Team Temporal Dynamics</strong> — Shuffler et al. (2018); Mathieu et al. (2017)</li>
+                        <li><strong>Affect in Text & Sentiment</strong> — Mohammad et al. (2018)</li>
+                    </ul>
+                </div>
+                <div id="scientificReport" class="scroll scientific-content"></div>
+            </section>
+
+            <section class="panel scientific-hypotheses">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h2 style="margin: 0;">📚 Scientific Hypotheses</h2>
+                    <a class="btn btn-download" id="downloadValidation" href="/download/validation" style="display: none;" title="Скачать отчёт о проверке гипотез с доказательствами">📥 Download Validation Report</a>
+                </div>
+                <div id="scientificHypotheses" class="scroll"></div>
+            </section>
+        </main>
+
+        <!-- ADVANCED ANALYTICS TAB -->
+        <main id="advancedTab" class="scientific-grid tab-content">
+            <section class="panel scientific-report">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+                    <h2 style="margin:0;">📈 Advanced Analytics</h2>
+                    <button id="loadAdvancedBtn" class="btn btn-primary">Load Analysis</button>
+                </div>
+                <div class="scientific-info">
+                    <p>Emotional Contagion, Language Style Matching, and Discourse Coherence analysis.</p>
+                    <ul>
+                        <li><strong>Emotional Contagion</strong> — Barsade (2002); Hatfield et al. (1994)</li>
+                        <li><strong>Language Style Matching</strong> — Gonzales et al. (2010); Tausczik & Pennebaker (2010)</li>
+                        <li><strong>Discourse Coherence</strong> — Graesser et al. (2014); McNamara et al. (2014)</li>
+                    </ul>
+                </div>
+                <div id="advancedReport" class="scroll scientific-content">
+                    <p style="color:var(--text-secondary);padding:2rem;text-align:center;">
+                        Click "Load Analysis" after at least 3 dialogue turns.
+                    </p>
+                </div>
+            </section>
+
+            <section class="panel scientific-hypotheses">
+                <h2>📊 Key Metrics</h2>
+                <div id="advancedMetrics">
+                    <p style="color:var(--text-secondary);padding:2rem;text-align:center;">
+                        No data yet.
+                    </p>
+                </div>
+            </section>
+        </main>
+
+        <!-- OBSERVER AGENT TAB -->
+        <main id="observerTab" class="scientific-grid tab-content">
+            <section class="panel scientific-report">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h2 style="margin: 0;">🔭 Observer Agent — Methodological Triangulation</h2>
+                    <button id="runObserverBtn" class="btn btn-primary">Run Observer Analysis</button>
+                </div>
+                <div class="scientific-info">
+                    <p>Non-participating LLM observer that independently analyzes dialogue and compares
+                    its qualitative findings with algorithmic metrics (Denzin, 2012).</p>
+                </div>
+                <div id="observerReport" class="scroll scientific-content">
+                    <p style="color: var(--text-secondary); padding: 2rem; text-align: center;">
+                        Click "Run Observer Analysis" after at least 3 dialogue turns to generate a triangulation report.
+                    </p>
+                </div>
+            </section>
+
+            <section class="panel scientific-hypotheses">
+                <h2>📚 Hypothesis Registry</h2>
+                <div id="observerHypothesisChecks" class="scroll" style="max-height: 420px; margin-bottom: 1rem;">
+                    <p style="color: var(--text-secondary); padding: 2rem; text-align: center;">
+                        The theory-backed hypothesis list will appear here when the dialogue starts.
+                    </p>
+                </div>
+                <h2 style="margin-top: 0;">📈 Triangulation Summary</h2>
+                <div id="triangulationSummary" class="scroll">
+                    <p style="color: var(--text-secondary); padding: 2rem; text-align: center;">
+                        No observations yet. Run the observer to see convergence/divergence analysis.
+                    </p>
+                </div>
+            </section>
+        </main>
+
+        <footer class="footer">
+            <span id="status">Ready</span>
+        </footer>
+    </div>
+
+    <!-- User participation modal -->
+    <div id="userInputModal" class="modal-overlay" style="display: none;">
+        <div class="modal-card">
+            <h3>Your turn to speak</h3>
+            <div class="form-group">
+                <label>Address to:</label>
+                <select id="userTargetSelect" class="wizard-select"></select>
+            </div>
+            <div class="form-group">
+                <label>Your message:</label>
+                <textarea id="userReplyInput" class="wizard-input" rows="3" placeholder="Type your message..."></textarea>
+            </div>
+            <div class="form-group">
+                <label>Tone:</label>
+                <select id="userToneSelect" class="wizard-select">
+                    <option value="auto">Auto-detect</option>
+                    <option value="positive">Positive</option>
+                    <option value="neutral" selected>Neutral</option>
+                    <option value="negative">Negative</option>
+                </select>
+            </div>
+            <div class="modal-actions">
+                <button id="userCancelBtn" class="btn">Cancel</button>
+                <button id="userSendBtn" class="btn btn-primary">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,97 @@
+@startuml AgentDialogueSim
+!theme plain
+skinparam classAttributeIconSize 0
+skinparam linetype ortho
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam roundcorner 5
+skinparam defaultFontSize 10
+
+title Архитектура системы симуляции многоагентных диалогов
+
+package "Ядро" {
+    class Agent {
+        +name
+        +nature
+        +system_prompt()
+    }
+    
+    class DialogueManager {
+        +agents
+        +history
+        +step()
+        +build_messages()
+        +model_turn()
+    }
+    
+    class AgentTurn {
+        +reply
+        +tone
+        +emotion
+        +target
+    }
+}
+
+package "Валидация" {
+    abstract class BaseValidator {
+        +validate()
+    }
+    
+    class ValidationPipeline {
+        +validators
+        +validate_turn()
+    }
+    
+    BaseValidator <|-- GrammaticalValidator
+    BaseValidator <|-- LanguageValidator
+    BaseValidator <|-- LogicalValidator
+    BaseValidator <|-- EthicalValidator
+}
+
+package "Аналитика" {
+    class MetricsCalculator {
+        +compute_metrics()
+        +hypotheses_from_metrics()
+    }
+    
+    class ScientificAnalyzer {
+        +compute_scientific_analysis()
+    }
+}
+
+package "Интерфейсы" {
+    class WebApp {
+        +api_start()
+        +api_step()
+    }
+    
+    class IOLogger {
+        +write_jsonl()
+    }
+}
+
+' Связи
+DialogueManager "1" *-- "many" Agent
+DialogueManager "1" --> "many" AgentTurn
+DialogueManager "1" --> "1" ValidationPipeline
+DialogueManager ..> MetricsCalculator
+DialogueManager ..> ScientificAnalyzer
+DialogueManager ..> IOLogger
+
+ValidationPipeline "1" *-- "many" BaseValidator
+
+WebApp "1" --> "1" DialogueManager
+WebApp "1" --> "1" IOLogger
+
+note right of DialogueManager
+    Центральный оркестратор
+    многоагентного взаимодействия
+end note
+
+note right of ValidationPipeline
+    Strategy Pattern
+    Многоуровневая валидация
+end note
+
+@enduml
+

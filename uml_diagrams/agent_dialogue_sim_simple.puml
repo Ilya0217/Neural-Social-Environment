@@ -1,0 +1,137 @@
+@startuml AgentDialogueSim
+!theme plain
+skinparam classAttributeIconSize 0
+skinparam linetype ortho
+skinparam packageStyle rectangle
+skinparam shadowing false
+
+title Архитектура системы симуляции многоагентных диалогов
+
+package "Ядро системы" {
+    class Agent {
+        +name : str
+        +nature : str
+        +persona : str
+        +system_prompt() : str
+    }
+    
+    class DialogueManager {
+        +agents : List[Agent]
+        +history : List[Dict]
+        +env_context : str
+        +step() : Tuple
+        +build_messages() : List
+        +model_turn() : AgentTurn
+    }
+    
+    class AgentTurn {
+        +reply : str
+        +tone : str
+        +emotion : str
+        +target : str
+    }
+}
+
+package "Система валидации" {
+    abstract class BaseValidator {
+        +validate() : List[ValidationResult]
+    }
+    
+    class ValidationPipeline {
+        +validators : List[BaseValidator]
+        +validate_turn() : Tuple
+    }
+    
+    class ValidationResult {
+        +level : ValidationLevel
+        +message : str
+    }
+    
+    enum ValidationLevel {
+        INFO
+        WARNING
+        ERROR
+        CRITICAL
+    }
+    
+    BaseValidator <|-- GrammaticalValidator
+    BaseValidator <|-- LanguageValidator
+    BaseValidator <|-- LogicalValidator
+    BaseValidator <|-- EthicalValidator
+}
+
+package "Аналитика" {
+    class MetricsCalculator {
+        +compute_metrics() : Dict
+        +hypotheses_from_metrics() : List
+    }
+    
+    class ScientificAnalyzer {
+        +compute_scientific_analysis() : ScientificAnalysisResult
+    }
+    
+    class ScientificAnalysisResult {
+        +network_density : float
+        +group_stage : Dict
+        +emotion_distribution : Dict
+    }
+}
+
+package "Интерфейсы" {
+    class WebApp {
+        +api_start() : JSON
+        +api_step() : JSON
+        +api_state() : JSON
+    }
+    
+    class IOLogger {
+        +write_jsonl() : void
+        +write_markdown() : void
+    }
+}
+
+package "Оптимизация" {
+    class CacheManager {
+        +get() : Optional
+        +set() : void
+    }
+    
+    class PerformanceMonitor {
+        +log_call() : void
+        +get_stats() : Dict
+    }
+}
+
+' Основные связи
+DialogueManager "1" *-- "many" Agent
+DialogueManager "1" --> "many" AgentTurn
+DialogueManager "1" --> "1" ValidationPipeline
+DialogueManager ..> MetricsCalculator
+DialogueManager ..> ScientificAnalyzer
+DialogueManager ..> CacheManager
+DialogueManager ..> PerformanceMonitor
+DialogueManager ..> IOLogger
+
+ValidationPipeline "1" *-- "many" BaseValidator
+ValidationPipeline "1" --> "many" ValidationResult
+ValidationResult "1" --> "1" ValidationLevel
+
+ScientificAnalyzer "1" --> "1" ScientificAnalysisResult
+
+WebApp "1" --> "1" DialogueManager
+WebApp "1" --> "1" IOLogger
+
+note right of DialogueManager
+    **Центральный компонент**
+    Управление диалогом,
+    генерация ответов,
+    координация агентов
+end note
+
+note right of ValidationPipeline
+    **Многоуровневая валидация**
+    Strategy Pattern
+end note
+
+@enduml
+

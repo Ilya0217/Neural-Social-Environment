@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Experiment — Join Links</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { padding: 32px; max-width: 900px; margin: 0 auto; }
+        h1 { text-align: center; margin-bottom: 8px; }
+        .subtitle { text-align: center; color: var(--text-dim); margin-bottom: 32px; }
+        .link-card {
+            display: flex; align-items: center; gap: 16px;
+            padding: 16px 20px; margin: 8px 0;
+            background: var(--surface); border-radius: 12px;
+            border: 1px solid var(--border);
+            transition: border-color 0.2s;
+        }
+        .link-card:hover { border-color: var(--accent); }
+        .link-name {
+            font-size: 20px; font-weight: 600;
+            min-width: 160px; color: var(--text);
+        }
+        .link-url {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px; color: var(--accent);
+            word-break: break-all; flex: 1;
+        }
+        .link-url a { color: var(--accent); text-decoration: none; }
+        .link-url a:hover { text-decoration: underline; }
+        .copy-btn {
+            padding: 8px 16px; border-radius: 8px;
+            background: var(--accent); color: white;
+            border: none; cursor: pointer; font-size: 13px;
+            white-space: nowrap;
+        }
+        .copy-btn:hover { opacity: 0.85; }
+        .copy-btn.copied { background: var(--tone-positive); }
+        .instructions {
+            margin-top: 32px; padding: 20px;
+            background: var(--surface); border-radius: 12px;
+            border: 1px solid var(--border);
+        }
+        .instructions h2 { margin-top: 0; font-size: 16px; }
+        .instructions ol { padding-left: 20px; }
+        .instructions li { margin: 8px 0; color: var(--text-dim); }
+        .copy-all-btn {
+            display: block; margin: 24px auto;
+            padding: 12px 32px; border-radius: 12px;
+            background: var(--accent); color: white;
+            border: none; cursor: pointer; font-size: 16px;
+            font-weight: 600;
+        }
+        .copy-all-btn:hover { opacity: 0.85; }
+    </style>
+</head>
+<body>
+    <h1>Dialogue Experiment</h1>
+    <p class="subtitle">{{ env }}</p>
+
+    <button class="copy-all-btn" onclick="copyAll()">Copy All Links</button>
+
+    {% for name, url in links.items() %}
+    <div class="link-card">
+        <span class="link-name">{{ name }}</span>
+        <span class="link-url"><a href="{{ url }}" target="_blank">{{ url }}</a></span>
+        <button class="copy-btn" onclick="copyLink(this, '{{ url }}')">Copy</button>
+    </div>
+    {% endfor %}
+
+    <div class="instructions">
+        <h2>Instructions for participants:</h2>
+        <ol>
+            <li>Open your personal link on your phone or laptop</li>
+            <li>Click <strong>"Join Experiment"</strong></li>
+            <li>When you see <strong>"YOUR TURN"</strong> (green banner) — write your message</li>
+            <li>Select who you're addressing, type your message, click <strong>Send</strong></li>
+            <li>Wait for others — the grey banner shows whose turn it is</li>
+        </ol>
+    </div>
+
+    <script>
+    function copyLink(btn, url) {
+        navigator.clipboard.writeText(url).then(() => {
+            btn.textContent = 'Copied!';
+            btn.classList.add('copied');
+            setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+        });
+    }
+    function copyAll() {
+        const links = [];
+        {% for name, url in links.items() %}
+        links.push('{{ name }}: {{ url }}');
+        {% endfor %}
+        navigator.clipboard.writeText(links.join('\n')).then(() => {
+            const btn = document.querySelector('.copy-all-btn');
+            btn.textContent = 'Copied all!';
+            setTimeout(() => { btn.textContent = 'Copy All Links'; }, 2000);
+        });
+    }
+    </script>
+</body>
+</html>

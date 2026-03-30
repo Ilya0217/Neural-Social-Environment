@@ -1,0 +1,40 @@
+@startuml UseCaseDiagram
+' Тип диаграммы: Use-Case (Диаграмма прецедентов)
+!theme plain
+skinparam defaultFontSize 20
+skinparam actorFontSize 20
+skinparam usecaseFontSize 18
+skinparam packageFontSize 20
+skinparam shadowing false
+skinparam roundcorner 5
+
+title Use-Case диаграмма системы симуляции многоагентных диалогов
+
+actor "Исследователь" as Researcher
+actor "Система" as System
+
+usecase "Настроить симуляцию" as UC1
+usecase "Запустить диалог" as UC2
+usecase "Валидировать сообщения" as UC3
+usecase "Вычислить метрики" as UC4
+usecase "Визуализировать граф" as UC5
+usecase "Сгенерировать гипотезы" as UC6
+usecase "Экспортировать данные" as UC7
+
+Researcher --> UC1
+Researcher --> UC2
+Researcher --> UC7
+
+System --> UC2
+System --> UC3
+System --> UC4
+System --> UC5
+System --> UC6
+
+UC2 ..> UC3
+UC2 ..> UC4
+UC4 ..> UC5
+UC4 ..> UC6
+
+@enduml
+

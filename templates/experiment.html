@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Experiment — Participant View</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        .exp-turn-banner {
+            padding: 16px 24px;
+            border-radius: 12px;
+            text-align: center;
+            font-size: 18px;
+            font-weight: 600;
+            margin: 12px 24px;
+            transition: all 0.3s ease;
+        }
+        .exp-turn-banner.my-turn {
+            background: rgba(16, 185, 129, 0.15);
+            border: 2px solid var(--tone-positive);
+            color: var(--tone-positive);
+            animation: pulse-border 1.5s ease-in-out infinite;
+        }
+        @keyframes pulse-border {
+            0%, 100% { border-color: var(--tone-positive); }
+            50% { border-color: rgba(16, 185, 129, 0.4); }
+        }
+        .exp-turn-banner.waiting {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+        }
+        .exp-turn-banner.processing {
+            background: rgba(99, 102, 241, 0.1);
+            border: 1px solid var(--accent);
+            color: var(--accent);
+        }
+        .exp-input-area {
+            transition: opacity 0.3s ease;
+        }
+        .exp-input-area.disabled {
+            opacity: 0.35;
+            pointer-events: none;
+        }
+        .exp-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            padding: 0 24px 24px;
+        }
+        .exp-left {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .exp-participant-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 4px;
+        }
+        .you-highlight {
+            border: 2px solid var(--accent) !important;
+        }
+    </style>
+</head>
+<body>
+    <!-- JOIN SCREEN -->
+    <div id="joinScreen" class="wizard-overlay">
+        <div class="wizard-container" style="max-width: 480px;">
+            <div class="wizard-header">
+                <div class="wizard-icon">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <circle cx="9" cy="7" r="3"/><circle cx="17" cy="11" r="3"/>
+                        <path d="M3 21v-2a4 4 0 014-4h4"/><path d="M21 21v-2a4 4 0 00-3-3.87"/>
+                    </svg>
+                </div>
+                <h1>Dialogue Experiment</h1>
+                <p class="wizard-subtitle">Enter your participant name to join</p>
+            </div>
+            <div class="wizard-content">
+                <div class="form-group">
+                    <label>Your name:</label>
+                    <input type="text" id="nameInput" class="wizard-input" placeholder="Enter your name...">
+                </div>
+                <p id="joinError" style="color: var(--tone-negative); display: none; margin-top: 8px;"></p>
+            </div>
+            <div class="wizard-actions">
+                <button id="joinBtn" class="wizard-btn wizard-btn-primary">Join Experiment</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MAIN EXPERIMENT VIEW -->
+    <div id="expMain" style="display: none;">
+        <header class="header">
+            <div>
+                <h1>Dialogue Experiment</h1>
+                <p class="subtitle" id="expEnv"></p>
+            </div>
+            <div class="controls">
+                <span id="myNameBadge" class="agent-badge" style="font-weight: 600; border: 1px solid var(--accent);"></span>
+                <span id="expTurn" style="color: var(--text-dim); font-size: 13px;">Turn: 0</span>
+            </div>
+        </header>
+
+        <!-- Turn indicator banner -->
+        <div id="turnBanner" class="exp-turn-banner waiting">
+            <span id="turnText">Connecting...</span>
+        </div>
+
+        <!-- Participants bar -->
+        <div id="participantsBar" class="agent-badges"></div>
+
+        <!-- Main grid -->
+        <div class="exp-grid">
+            <div class="exp-left">
+                <!-- Input area -->
+                <section id="inputArea" class="panel exp-input-area disabled">
+                    <h2>Your message</h2>
+                    <div class="form-group">
+                        <label>Address to:</label>
+                        <select id="targetSelect" class="wizard-select"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>Message:</label>
+                        <textarea id="messageInput" class="wizard-input" rows="3" placeholder="Type your message..."></textarea>
+                    </div>
+                    <div class="form-group" style="display: flex; gap: 12px; align-items: center;">
+                        <select id="toneSelect" class="wizard-select" style="width: auto; min-width: 120px;">
+                            <option value="auto">Auto tone</option>
+                            <option value="positive">Positive</option>
+                            <option value="neutral" selected>Neutral</option>
+                            <option value="negative">Negative</option>
+                        </select>
+                        <button id="sendBtn" class="btn btn-primary" disabled>Send</button>
+                    </div>
+                </section>
+
+                <!-- Transcript -->
+                <section class="panel transcript" style="min-height: 300px;">
+                    <h2>Transcript</h2>
+                    <div id="transcript" class="scroll"></div>
+                </section>
+            </div>
+
+            <!-- Right column: graph -->
+            <div>
+                <section class="panel graph">
+                    <h2>Interaction graph</h2>
+                    <div class="img-wrap">
+                        <div id="graphPlaceholder" class="graph-placeholder">
+                            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.2">
+                                <circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/>
+                                <circle cx="12" cy="18" r="2"/><circle cx="6" cy="14" r="2"/>
+                                <line x1="7.5" y1="7" x2="11" y2="16.5" opacity="0.5"/>
+                                <line x1="16.5" y1="7" x2="13" y2="16.5" opacity="0.5"/>
+                            </svg>
+                            <span>Graph appears after 5 messages</span>
+                        </div>
+                        <img id="graphImg" src="" alt="Graph" style="display:none;" />
+                    </div>
+                </section>
+            </div>
+        </div>
+
+        <footer class="footer">
+            <span id="status">Ready</span>
+        </footer>
+    </div>
+
+    <script src="/static/experiment.js"></script>
+</body>
+</html>
