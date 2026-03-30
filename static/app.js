@@ -57,6 +57,9 @@ const agentBadgesEl = el('agentBadges');
 const scientificReportEl = el('scientificReport');
 const scientificHypothesesEl = el('scientificHypotheses');
 const downloadValidationBtn = el('downloadValidation');
+const observerHypothesisChecksEl = el('observerHypothesisChecks');
+const triangulationSummaryEl = el('triangulationSummary');
+const observerReportEl = el('observerReport');
 
 // Tab elements
 const tabBtns = document.querySelectorAll('.tab-btn');
@@ -108,11 +111,11 @@ const DEFAULT_ROLES = [
 tabBtns.forEach(btn => {
   btn.addEventListener('click', () => {
     const tabName = btn.dataset.tab;
-    
+
     // Update button states
     tabBtns.forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    
+
     // Update tab visibility
     document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
     const targetTab = document.getElementById(tabName + 'Tab');
@@ -156,13 +159,13 @@ toStep2Btn.addEventListener('click', () => {
       questionnaire: {}
     });
   }
-  
+
   currentAgentIndex = 0;
   totalAgentNum.textContent = agentCount;
-  
+
   step1.classList.remove('active');
   step2.classList.add('active');
-  
+
   updateAgentForm();
   renderAgentCards();
 });
@@ -186,7 +189,7 @@ prevAgentBtn.addEventListener('click', () => {
 // Save current agent and go to next
 nextAgentBtn.addEventListener('click', () => {
   saveCurrentAgent();
-  
+
   if (currentAgentIndex < agentCount - 1) {
     currentAgentIndex++;
     updateAgentForm();
@@ -197,7 +200,7 @@ nextAgentBtn.addEventListener('click', () => {
 // Start dialogue
 startDialogueBtn.addEventListener('click', async () => {
   saveCurrentAgent();
-  
+
   // Validate all agents have names
   for (let i = 0; i < agents.length; i++) {
     if (!agents[i].name.trim()) {
@@ -208,7 +211,7 @@ startDialogueBtn.addEventListener('click', async () => {
       return;
     }
   }
-  
+
   // Check for duplicate names
   const names = agents.map(a => a.name.toLowerCase().trim());
   const uniqueNames = new Set(names);
@@ -216,7 +219,7 @@ startDialogueBtn.addEventListener('click', async () => {
     alert('Each agent must have a unique name');
     return;
   }
-  
+
   await startSession();
 });
 
@@ -225,6 +228,7 @@ newSessionBtn.addEventListener('click', () => {
   running = false;
   userParticipating = false;
   stepBtn.disabled = true;
+  stepBtn.textContent = 'Next message';
   if (participateBtn) participateBtn.style.display = 'none';
   mainApp.style.display = 'none';
   setupWizard.style.display = 'flex';
@@ -263,14 +267,14 @@ function saveCurrentAgent() {
 
 function updateAgentForm() {
   const agent = agents[currentAgentIndex];
-  
+
   currentAgentNum.textContent = currentAgentIndex + 1;
   agentConfigTitle.textContent = `Configure Agent ${currentAgentIndex + 1}`;
-  
+
   agentNameInput.value = agent.name;
   agentNatureSelect.value = agent.nature;
   agentColorInput.value = agent.color;
-  
+
   const q = agent.questionnaire || {};
   qBackground.value = q.background || '';
   qMotivation.value = q.motivation || '';
@@ -287,7 +291,7 @@ function updateAgentForm() {
   qFavoriteTopics.value = q.favorite_topics || '';
   qStressReaction.value = q.stress_reaction || '';
   qSignaturePhrase.value = q.signature_phrase || '';
-  
+
   // Update button visibility
   // Show/hide prev button
   if (currentAgentIndex === 0) {
@@ -295,7 +299,7 @@ function updateAgentForm() {
   } else {
     prevAgentBtn.style.display = 'inline-flex';
   }
-  
+
   // Show/hide next/start buttons
   if (currentAgentIndex === agentCount - 1) {
     nextAgentBtn.style.display = 'none';
@@ -304,7 +308,7 @@ function updateAgentForm() {
     nextAgentBtn.style.display = 'inline-flex';
     startDialogueBtn.style.display = 'none';
   }
-  
+
   // Scroll form to top
   const scrollContainer = document.querySelector('.wizard-content-scroll');
   if (scrollContainer) {
@@ -314,7 +318,7 @@ function updateAgentForm() {
 
 function renderAgentCards() {
   agentCards.innerHTML = '';
-  
+
   agents.forEach((agent, idx) => {
     const card = document.createElement('div');
     card.className = 'agent-card' + (idx === currentAgentIndex ? ' active' : '');
@@ -348,9 +352,9 @@ async function api(path, method = 'GET', body) {
 
 async function startSession() {
   const envIndex = parseInt(wizardEnvSelect.value || '0', 10);
-  
+
   statusEl.textContent = 'Initializing session...';
-  
+
   // Show loading overlay
   const loadingEl = document.createElement('div');
   loadingEl.className = 'loading-overlay';
@@ -360,7 +364,7 @@ async function startSession() {
     <div class="loading-agent" id="loadingAgent">Initializing<span class="loading-dots"><span></span><span></span><span></span></span></div>
   `;
   document.body.appendChild(loadingEl);
-  
+
   // Animate agent names in loading
   const agentNames = agents.map(a => `${a.name} (${a.nature})`);
   let loadIdx = 0;
@@ -373,7 +377,7 @@ async function startSession() {
       el.innerHTML = `Finalizing<span class="loading-dots"><span></span><span></span><span></span></span>`;
     }
   }, 2500);
-  
+
   try {
     const joinChecked = joinAsParticipantCheckbox ? joinAsParticipantCheckbox.checked : false;
     const data = await api('/api/start', 'POST', {
@@ -386,22 +390,22 @@ async function startSession() {
         questionnaire: a.questionnaire
       }))
     });
-    
+
     clearInterval(loadingInterval);
     loadingEl.remove();
-    
+
     if (!data.ok) throw new Error(data.error || 'Failed to start session');
-    
+
     running = true;
     stepBtn.disabled = false;
-    
+
     // Hide wizard, show main app
     setupWizard.style.display = 'none';
     mainApp.style.display = 'block';
-    
+
     // Render agent badges
     renderAgentBadges();
-    
+
     // Clear previous data
     renderHistory([]);
     renderHyps([]);
@@ -412,24 +416,29 @@ async function startSession() {
     renderMetrics('');
     renderScientificReport('');
     renderScientificHypotheses([]);
-    
+    renderObserverHypothesisChecks([]);
+    renderTriangulationSummary({});
+    if (observerReportEl) {
+      observerReportEl.innerHTML = '<p style="color: var(--text-secondary); padding: 2rem; text-align: center;">Observer checkpoints will appear automatically after 5 dialogue turns.</p>';
+    }
+
     // Hide validation button on new session
     if (downloadValidationBtn) {
       downloadValidationBtn.style.display = 'none';
     }
-    
+
     // Switch to dialogue tab
     tabBtns.forEach(b => b.classList.remove('active'));
     document.querySelector('.tab-btn[data-tab="dialogue"]').classList.add('active');
     document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
     dialogueTab.classList.add('active');
-    
+
     // Use agents_data if available (includes big_five)
     if (data.agents_data) {
       agents = data.agents_data;
       renderAgentBadges();
     }
-    
+
     // Set user participation state
     userParticipating = !!data.user_participating;
     if (participateBtn) {
@@ -452,7 +461,7 @@ function renderAgentBadges() {
     const isObs = agent.is_observer;
     badge.className = 'agent-badge' + (isObs ? ' agent-badge-observer' : '');
     const b5 = agent.big_five;
-    const b5Tooltip = b5 
+    const b5Tooltip = b5
       ? `O:${b5.openness} C:${b5.conscientiousness} E:${b5.extraversion} A:${b5.agreeableness} N:${b5.neuroticism}`
       : '';
     const b5Html = b5
@@ -581,7 +590,7 @@ function renderScientificReport(reportMd) {
     scientificReportEl.innerHTML = '<p class="placeholder">Scientific analysis will appear after 5 dialogue turns.</p>';
     return;
   }
-  
+
   // Convert markdown to HTML (simple conversion)
   const html = convertMarkdownToHtml(reportMd);
   scientificReportEl.innerHTML = html;
@@ -593,9 +602,9 @@ function renderScientificHypotheses(hypotheses) {
     scientificHypothesesEl.innerHTML = '<p class="placeholder">Scientific hypotheses will appear after analysis.</p>';
     return;
   }
-  
+
   scientificHypothesesEl.innerHTML = '';
-  
+
   hypotheses.forEach(hyp => {
     const card = document.createElement('div');
     card.className = 'sci-hyp-card';
@@ -612,15 +621,93 @@ function renderScientificHypotheses(hypotheses) {
   });
 }
 
+function renderObserverHypothesisChecks(checks, summary = '') {
+  if (!observerHypothesisChecksEl) return;
+  if (!checks || checks.length === 0) {
+    observerHypothesisChecksEl.innerHTML = '<p style="color: var(--text-secondary); padding: 2rem; text-align: center;">Every 5 turns the observer will automatically check theory-based hypotheses here.</p>';
+    return;
+  }
+
+  const statusMeta = {
+    confirmed: { label: 'Confirmed', bg: 'rgba(16,185,129,0.16)', color: '#34d399' },
+    partial: { label: 'Partial', bg: 'rgba(245,158,11,0.16)', color: '#fbbf24' },
+    not_confirmed: { label: 'Not confirmed', bg: 'rgba(239,68,68,0.16)', color: '#f87171' },
+    insufficient_data: { label: 'Insufficient data', bg: 'rgba(148,163,184,0.16)', color: '#cbd5e1' },
+  };
+
+  let html = '<div style="padding:1rem;">';
+  if (summary) {
+    html += `<div style="margin-bottom:1rem;padding:0.9rem 1rem;border:1px solid var(--border);border-radius:14px;background:rgba(255,255,255,0.02);">${escapeHtml(summary)}</div>`;
+  }
+
+  checks.forEach((check) => {
+    const meta = statusMeta[check.status] || statusMeta.insufficient_data;
+    html += `
+      <div style="border:1px solid var(--border);border-radius:16px;padding:1rem;margin-bottom:0.9rem;background:rgba(255,255,255,0.02);">
+        <div style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-start;margin-bottom:0.45rem;">
+          <div>
+            <div style="font-weight:700;">${escapeHtml(check.theory || 'Theory')}</div>
+            <div style="font-size:12px;color:var(--text-dim);">${escapeHtml(check.citation || '')}</div>
+          </div>
+          <span style="white-space:nowrap;padding:0.3rem 0.7rem;border-radius:999px;background:${meta.bg};color:${meta.color};font-size:12px;font-weight:700;">${meta.label}</span>
+        </div>
+        <div style="font-size:13px;line-height:1.45;margin-bottom:0.45rem;"><strong>Hypothesis:</strong> ${escapeHtml(check.hypothesis || '')}</div>
+        <div style="font-size:13px;line-height:1.45;color:var(--text-secondary);"><strong>Evidence:</strong> ${escapeHtml(check.evidence || 'No evidence provided.')}</div>
+      </div>
+    `;
+  });
+
+  html += '</div>';
+  observerHypothesisChecksEl.innerHTML = html;
+}
+
+function renderTriangulationSummary(summary) {
+  if (!triangulationSummaryEl) return;
+  if (!summary || Object.keys(summary).length === 0) {
+    triangulationSummaryEl.innerHTML = '<p style="color: var(--text-secondary); padding: 2rem; text-align: center;">No observations yet.</p>';
+    return;
+  }
+
+  let html = '<div style="padding: 1rem;">';
+  html += `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin-bottom:1.5rem;">`;
+  html += `<div class="stat-card"><div class="stat-value">${((summary.avg_convergence || 0) * 100).toFixed(0)}%</div><div class="stat-label">Avg convergence</div></div>`;
+  html += `<div class="stat-card"><div class="stat-value">${summary.total_agreements || 0}</div><div class="stat-label">Agreements</div></div>`;
+  html += `<div class="stat-card"><div class="stat-value">${summary.total_divergences || 0}</div><div class="stat-label">Divergences</div></div>`;
+  html += `</div>`;
+  html += `<p>Observations: ${summary.observations || 0}</p>`;
+  if ((summary.observations || 0) > 1) {
+    html += `<p>Range: ${((summary.min_convergence || 0) * 100).toFixed(0)}% – ${((summary.max_convergence || 0) * 100).toFixed(0)}%</p>`;
+  }
+  if (summary.total_novel_insights) {
+    html += `<p>Novel insights captured: ${summary.total_novel_insights}</p>`;
+  }
+  html += '</div>';
+  triangulationSummaryEl.innerHTML = html;
+}
+
+function renderObserverAnalysis(data) {
+  if (observerReportEl && data && data.observer_report) {
+    observerReportEl.innerHTML = renderMarkdown(data.observer_report);
+  }
+  if (observerReportEl && data && data.report) {
+    observerReportEl.innerHTML = renderMarkdown(data.report);
+  }
+  renderObserverHypothesisChecks(
+    (data && (data.observer_hypothesis_checks || data.hypothesis_checks)) || [],
+    (data && (data.observer_hypothesis_summary || data.hypothesis_summary)) || ''
+  );
+  renderTriangulationSummary((data && data.triangulation_summary) || {});
+}
+
 function convertMarkdownToHtml(md) {
   const lines = md.split(/\r?\n/);
   const out = [];
   let i = 0;
   let inList = false;
-  
+
   while (i < lines.length) {
     const line = lines[i];
-    
+
     // Headers
     if (/^###\s+/.test(line)) {
       if (inList) { out.push('</ul>'); inList = false; }
@@ -637,7 +724,7 @@ function convertMarkdownToHtml(md) {
       out.push('<h1>' + escapeHtml(line.replace(/^#\s+/, '')) + '</h1>');
       i++; continue;
     }
-    
+
     // Tables
     if (/^\|.*\|$/.test(line)) {
       if (inList) { out.push('</ul>'); inList = false; }
@@ -649,8 +736,8 @@ function convertMarkdownToHtml(md) {
         const header = tableLines[0];
         const rows = tableLines.slice(2);
         const headers = header.split('|').slice(1, -1).map(s => s.trim());
-        out.push('<div class="tbl-wrap"><table class="metrics-table"><thead><tr>' + 
-          headers.map(h => '<th>' + escapeHtml(h) + '</th>').join('') + 
+        out.push('<div class="tbl-wrap"><table class="metrics-table"><thead><tr>' +
+          headers.map(h => '<th>' + escapeHtml(h) + '</th>').join('') +
           '</tr></thead><tbody>');
         rows.forEach(r => {
           const cells = r.split('|').slice(1, -1).map(s => s.trim());
@@ -662,7 +749,7 @@ function convertMarkdownToHtml(md) {
         continue;
       }
     }
-    
+
     // List items
     if (/^[-*]\s+/.test(line)) {
       if (!inList) { out.push('<ul>'); inList = true; }
@@ -672,21 +759,21 @@ function convertMarkdownToHtml(md) {
       out.push('<li>' + escapeHtml(content).replace(/&lt;strong&gt;/g, '<strong>').replace(/&lt;\/strong&gt;/g, '</strong>') + '</li>');
       i++; continue;
     }
-    
+
     // Horizontal rule
     if (/^---+$/.test(line)) {
       if (inList) { out.push('</ul>'); inList = false; }
       out.push('<hr>');
       i++; continue;
     }
-    
+
     // Empty line
     if (line.trim().length === 0) {
       if (inList) { out.push('</ul>'); inList = false; }
       out.push('<div class="spacer"></div>');
       i++; continue;
     }
-    
+
     // Regular paragraph with bold handling
     if (inList) { out.push('</ul>'); inList = false; }
     let content = line;
@@ -694,7 +781,7 @@ function convertMarkdownToHtml(md) {
     out.push('<p>' + escapeHtml(content).replace(/&lt;strong&gt;/g, '<strong>').replace(/&lt;\/strong&gt;/g, '</strong>') + '</p>');
     i++;
   }
-  
+
   if (inList) out.push('</ul>');
   return out.join('\n');
 }
@@ -704,15 +791,17 @@ stepBtn.addEventListener('click', async () => {
   if (!running) return;
   stepBtn.disabled = true;
   statusEl.textContent = 'Generating message...';
-  
+
   try {
     typingEl && (typingEl.style.display = 'flex');
+
+    // In experiment mode, use experiment endpoint and loop until human turn
     const data = await api('/api/step', 'POST', {});
-    
+
     if (!data.ok) throw new Error(data.error || 'failed');
-    
+
     renderHistory(data.history || []);
-    
+
     if (data.image_url) {
       graphImg.src = data.image_url + '?t=' + Date.now();
       graphImg.style.display = 'block';
@@ -725,7 +814,7 @@ stepBtn.addEventListener('click', async () => {
     if (data.metrics_md) {
       renderMetrics(data.metrics_md);
     }
-    
+
     // Render scientific analysis
     if (data.scientific_report) {
       renderScientificReport(data.scientific_report);
@@ -733,7 +822,8 @@ stepBtn.addEventListener('click', async () => {
     if (data.scientific_hypotheses) {
       renderScientificHypotheses(data.scientific_hypotheses);
     }
-    
+    renderObserverAnalysis(data);
+
     statusEl.textContent = `Turn: ${data.turn}`;
 
     // Notify if agent addressed User
@@ -808,32 +898,12 @@ if (runObserverBtn) {
     try {
       const res = await fetch('/api/observer', { method: 'POST' });
       const data = await res.json();
-      const reportDiv = document.getElementById('observerReport');
-      const summaryDiv = document.getElementById('triangulationSummary');
       if (data.ok && data.report) {
-        reportDiv.innerHTML = renderMarkdown(data.report);
-        // Render triangulation summary
-        const s = data.triangulation_summary || {};
-        let html = '<div style="padding: 1rem;">';
-        html += `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin-bottom:1.5rem;">`;
-        html += `<div class="stat-card"><div class="stat-value">${(data.convergence_score * 100).toFixed(0)}%</div><div class="stat-label">Convergence</div></div>`;
-        html += `<div class="stat-card"><div class="stat-value">${(data.agreements || []).length}</div><div class="stat-label">Agreements</div></div>`;
-        html += `<div class="stat-card"><div class="stat-value">${(data.divergences || []).length}</div><div class="stat-label">Divergences</div></div>`;
-        html += `</div>`;
-        if (data.novel_insights && data.novel_insights.length) {
-          html += '<h3>Novel Insights</h3><ul>';
-          data.novel_insights.forEach(i => html += `<li>${i}</li>`);
-          html += '</ul>';
-        }
-        if (s.observations > 1) {
-          html += `<h3>Longitudinal Trend</h3>`;
-          html += `<p>Observations: ${s.observations} | Avg convergence: ${(s.avg_convergence * 100).toFixed(0)}%</p>`;
-          html += `<p>Range: ${(s.min_convergence * 100).toFixed(0)}% – ${(s.max_convergence * 100).toFixed(0)}%</p>`;
-        }
-        html += '</div>';
-        summaryDiv.innerHTML = html;
+        renderObserverAnalysis(data);
       } else {
-        reportDiv.innerHTML = `<p style="color:var(--text-secondary);padding:2rem;">${data.error || 'No data'}</p>`;
+        if (observerReportEl) {
+          observerReportEl.innerHTML = `<p style="color:var(--text-secondary);padding:2rem;">${data.error || 'No data'}</p>`;
+        }
       }
     } catch(e) {
       console.error(e);
@@ -898,6 +968,7 @@ if (userSendBtn) {
       if (data.metrics_md) renderMetrics(data.metrics_md);
       if (data.scientific_report) renderScientificReport(data.scientific_report);
       if (data.scientific_hypotheses) renderScientificHypotheses(data.scientific_hypotheses);
+      renderObserverAnalysis(data);
       checkValidationButton(data);
     } catch (e) {
       console.error(e);

@@ -27,14 +27,14 @@
                     <h1>Agent Dialogue Simulator</h1>
                     <p class="wizard-subtitle">Configure your multi-agent conversation</p>
                 </div>
-                
+
                 <div class="wizard-content">
                     <label class="wizard-label">Number of participants</label>
                     <div class="slider-container">
                         <input type="range" id="agentCountSlider" class="agent-slider" min="2" max="20" value="3">
                         <div class="slider-value"><span id="sliderValue">3</span> agents</div>
                     </div>
-                    
+
                     <label class="wizard-label" style="margin-top: 28px;">Environment context</label>
                     <select id="wizardEnvSelect" class="wizard-select">
                         {% for e in envs %}
@@ -48,7 +48,7 @@
                     </label>
                     <p class="wizard-hint" style="margin-top: 4px; font-size: 12px; color: var(--text-dim);">You will appear as "User" in the dialogue. Agents can address you.</p>
                 </div>
-                
+
                 <div class="wizard-actions">
                     <button id="toStep2Btn" class="wizard-btn wizard-btn-primary">
                         Configure Agents
@@ -58,7 +58,7 @@
                     </button>
                 </div>
             </div>
-            
+
             <!-- Step 2: Agent Configuration -->
             <div id="step2" class="wizard-step">
                 <div class="wizard-header compact">
@@ -67,7 +67,7 @@
                     </div>
                     <h2 id="agentConfigTitle">Configure Agent</h2>
                 </div>
-                
+
                 <div class="wizard-content-scroll">
                     <div class="wizard-content agent-form">
                         <div class="form-row">
@@ -84,89 +84,89 @@
                                 <input type="color" id="agentColor" class="wizard-color" value="#6d9df4">
                             </div>
                         </div>
-                        
+
                         <div class="questionnaire">
                             <h3 class="questionnaire-title">Social Characteristics Research Questionnaire</h3>
                             <p class="questionnaire-hint">Answer these questions to define social behavior patterns. Leave blank for defaults based on role.</p>
-                            
+
                             <div class="questionnaire-section">
                                 <h4 class="section-title">Basic Information</h4>
                                 <div class="form-group">
                                     <label>Professional/Educational Background</label>
                                     <input type="text" id="q_background" class="wizard-input" placeholder="e.g., third-year student, former designer, researcher with AI experience...">
                                 </div>
-                                
+
                                 <div class="form-group">
                                     <label>What motivates you most in group discussions?</label>
                                     <input type="text" id="q_motivation" class="wizard-input" placeholder="e.g., finding new ideas, preventing errors, achieving consensus...">
                                 </div>
                             </div>
-                            
+
                             <div class="questionnaire-section">
                                 <h4 class="section-title">Social Behavior Patterns</h4>
                                 <div class="form-group">
                                     <label>How do you typically behave in a group?</label>
                                     <input type="text" id="q_social_style" class="wizard-input" placeholder="e.g., speak up first, prefer listening, seek compromises, ask many questions...">
                                 </div>
-                                
+
                                 <div class="form-group">
                                     <label>How do you react to disagreements in the group?</label>
                                     <input type="text" id="q_conflict_approach" class="wizard-input" placeholder="e.g., openly disagree, seek compromise, change topic, analyze causes...">
                                 </div>
-                                
+
                                 <div class="form-group">
                                     <label>How do you make decisions in a group?</label>
                                     <input type="text" id="q_decision_style" class="wizard-input" placeholder="e.g., quickly propose options, think long, consult others, rely on data...">
                                 </div>
-                                
+
                                 <div class="form-group">
                                     <label>How much do you trust others' opinions?</label>
                                     <input type="text" id="q_trust_level" class="wizard-input" placeholder="e.g., usually trust, verify facts, skeptical, trust experts...">
                                 </div>
-                                
+
                                 <div class="form-group">
                                     <label>How do you prefer to work with others?</label>
                                     <input type="text" id="q_cooperation_style" class="wizard-input" placeholder="e.g., actively collaborate, work independently, compete for ideas, support others...">
                                 </div>
-                                
+
                                 <div class="form-group">
                                     <label>How openly do you express emotions in a group?</label>
                                     <input type="text" id="q_emotional_openness" class="wizard-input" placeholder="e.g., very openly, reserved, only positive, analytically without emotions...">
                                 </div>
-                                
+
                                 <div class="form-group">
                                     <label>How do you behave in group leadership situations?</label>
                                     <input type="text" id="q_leadership_tendency" class="wizard-input" placeholder="e.g., often take initiative, support leader, work in background, coordinate process...">
                                 </div>
-                                
+
                                 <div class="form-group">
                                     <label>How do you react to criticism of your ideas?</label>
                                     <input type="text" id="q_criticism_reaction" class="wizard-input" placeholder="e.g., defend, analyze constructively, accept calmly, seek compromise...">
                                 </div>
-                                
+
                                 <div class="form-group">
                                     <label>What's important to you in group dynamics?</label>
                                     <input type="text" id="q_group_dynamics" class="wizard-input" placeholder="e.g., everyone should be heard, efficiency matters, need structure, atmosphere is key...">
                                 </div>
                             </div>
-                            
+
                             <div class="questionnaire-section">
                                 <h4 class="section-title">Communication Style</h4>
                                 <div class="form-group">
                                     <label>Speech habits, quirks, or small grammatical errors?</label>
                                     <input type="text" id="q_speech_flaws" class="wizard-input" placeholder="e.g., skip articles, say 'kinda', use jargon, filler words...">
                                 </div>
-                                
+
                                 <div class="form-group">
                                     <label>Favorite topics you often bring up?</label>
                                     <input type="text" id="q_favorite_topics" class="wizard-input" placeholder="e.g., practical experiments, risks and problems, shared goals, data and metrics...">
                                 </div>
-                                
+
                                 <div class="form-group">
                                     <label>How do you react when discussion gets stuck or tense?</label>
                                     <input type="text" id="q_stress_reaction" class="wizard-input" placeholder="e.g., make a joke, pause, point out problem, suggest structure...">
                                 </div>
-                                
+
                                 <div class="form-group">
                                     <label>Signature phrase you often use?</label>
                                     <input type="text" id="q_signature_phrase" class="wizard-input" placeholder="e.g., 'Let's check', 'What if...', 'Listen, we need...'">
@@ -175,7 +175,7 @@
                         </div>
                     </div>
                 </div>
-                
+
                 <div class="wizard-actions">
                     <button id="backToStep1Btn" class="wizard-btn wizard-btn-secondary">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -202,7 +202,7 @@
                         </svg>
                     </button>
                 </div>
-                
+
                 <!-- Agent preview cards -->
                 <div id="agentPreview" class="agent-preview">
                     <h4>Configured Agents</h4>
@@ -359,7 +359,13 @@
             </section>
 
             <section class="panel scientific-hypotheses">
-                <h2>📊 Triangulation Summary</h2>
+                <h2>📊 Hypothesis Checkpoints</h2>
+                <div id="observerHypothesisChecks" class="scroll" style="max-height: 420px; margin-bottom: 1rem;">
+                    <p style="color: var(--text-secondary); padding: 2rem; text-align: center;">
+                        Every 5 turns the observer will automatically check theory-based hypotheses here.
+                    </p>
+                </div>
+                <h2 style="margin-top: 0;">📈 Triangulation Summary</h2>
                 <div id="triangulationSummary" class="scroll">
                     <p style="color: var(--text-secondary); padding: 2rem; text-align: center;">
                         No observations yet. Run the observer to see convergence/divergence analysis.

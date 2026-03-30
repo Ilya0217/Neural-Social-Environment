@@ -1,39 +1,51 @@
 from __future__ import annotations
+
+import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-import sys
 
-from flask import Flask, jsonify, render_template, request, send_from_directory, send_file
+from flask import (
+    Flask,
+    jsonify,
+    render_template,
+    request,
+    send_file,
+    send_from_directory,
+)
 from openai import OpenAI
 
+from .advanced_analytics import compute_advanced_analysis, render_advanced_report
+from .agents import Agent
+from .analytics import (
+    compute_metrics,
+    get_hypothesis_validation_report,
+    get_scientific_hypotheses_full,
+    hypotheses_from_metrics,
+    render_markdown_report,
+    save_report_md,
+    validate_hypotheses,
+)
 from .config import (
+    DEFAULT_ENV_CONTEXT_INDEX,
     LOG_DIR,
-    OUT_DIR,
     OPENAI_API_KEY,
     OPENAI_BASE_URL,
-    DEFAULT_ENV_CONTEXT_INDEX,
+    OUT_DIR,
     VIZ_EDGE_WINDOW,
     VIZ_SEED,
 )
-from .visualize import draw_interactions_pro
-from .agents import Agent
 from .dialogue_manager import DialogueManager
+from .env_context import get_env_context_by_index, list_env_contexts
 from .io_logger import IOLogger
-from .env_context import list_env_contexts, get_env_context_by_index
-from .analytics import (
-    compute_metrics, 
-    hypotheses_from_metrics, 
-    render_markdown_report, 
-    save_report_md,
-    get_scientific_hypotheses_full,
-    validate_hypotheses,
-    get_hypothesis_validation_report,
-)
-from .scientific_analytics import render_scientific_report, generate_scientific_hypotheses
-from .profiles import initialize_agents, initialize_agents_from_config
 from .observer_agent import ObserverAgent
-from .advanced_analytics import compute_advanced_analysis, render_advanced_report
-
+from .profiles import initialize_agents, initialize_agents_from_config
+from .scientific_analytics import (
+    generate_scientific_hypotheses,
+    render_scientific_report,
+)
+from .visualize import draw_interactions_pro
 
 app = Flask(
     __name__,
@@ -57,9 +69,12 @@ class AppState:
         self.previous_metrics: Optional[Dict[str, Any]] = None
         self.observer: Optional[ObserverAgent] = None
         self.last_observer_report: str = ""
+        self.last_observer_payload: Optional[Dict[str, Any]] = None
         self.user_participating: bool = False
+        self._step_lock = threading.Lock()
 
-    def reset(self, env_index: int, agents_config: Optional[List[Dict[str, Any]]] = None, join_as_participant: bool = False):
+    def reset(self, env_index: int, agents_config: Optional[List[Dict[str, Any]]] = None,
+              join_as_participant: bool = False, human_participants: Optional[List[Dict[str, Any]]] = None):
         if not OPENAI_API_KEY:
             raise RuntimeError("OPENAI_API_KEY is not set")
 
@@ -100,9 +115,9 @@ class AppState:
         else:
             agents = initialize_agents(interactive=False)
 
-        # Добавляем пользователя как участника если запрошено
         self.user_participating = join_as_participant
         if join_as_participant:
+            # Original single-user mode
             from .config import USER_AGENT
             user_agent = Agent(
                 name=USER_AGENT["name"],
@@ -111,12 +126,12 @@ class AppState:
                 is_human=True,
             )
             agents.insert(0, user_agent)
-
         # В web-версии human_io=None — пользователь пишет через /api/user_message
         self.dm = DialogueManager(client=self.client, agents=agents, env_context=self.env_context, human_io=None)
         # Initialize observer agent for methodological triangulation
         self.observer = ObserverAgent(client=self.client)
         self.last_observer_report = ""
+        self.last_observer_payload = None
 
         self.logger = IOLogger(
             jsonl_path=LOG_DIR / "dialog.jsonl",
@@ -152,6 +167,30 @@ class AppState:
         self.last_metrics = None
         self.last_hyps = []
 
+    def _build_scientific_summary(self) -> Optional[Dict[str, Any]]:
+        if not self.last_metrics or "scientific" not in self.last_metrics:
+            return None
+        sci = self.last_metrics["scientific"]
+        if not hasattr(sci, "group_stage"):
+            return None
+        return {
+            "group_stage": sci.group_stage,
+            "network_density": sci.network_density,
+            "dominant_emotion": sci.dominant_emotion,
+        }
+
+    def _serialize_observer_report(self, report) -> Dict[str, Any]:
+        return {
+            "report": self.observer.render_report(report) if self.observer else "",
+            "convergence_score": report.convergence_score,
+            "agreements": report.agreements,
+            "divergences": report.divergences,
+            "novel_insights": report.novel_insights,
+            "hypothesis_summary": report.hypothesis_summary,
+            "hypothesis_checks": report.hypothesis_checks,
+            "triangulation_summary": self.observer.get_triangulation_summary() if self.observer else {},
+        }
+
     def compute_metrics_if_needed(self, record: Dict[str, Any]):
         """Compute graphs, metrics, hypotheses if should_plot(). Returns (image_url, metrics_md, hyps)."""
         image_url = None
@@ -172,7 +211,7 @@ class AppState:
             )
             image_url = f"/outputs/{out_path.name}"
 
-            agents_order = list(self.agents_meta.keys())
+            agents_order = [a.name for a in self.dm.agents]
             metrics = compute_metrics(self.dm.history, agents_order, window_size=VIZ_EDGE_WINDOW)
             hyps = hypotheses_from_metrics(metrics, user_name=None)
             metrics_md = render_markdown_report(metrics, turn=record["turn"], title="Dialogue — metrics")
@@ -205,6 +244,21 @@ class AppState:
                     print(f"[Warning] Hypothesis validation failed: {e}", file=sys.stderr)
                     self.last_validation_report = ""
 
+            if self.observer and len(self.dm.history) >= 3:
+                try:
+                    report = self.observer.observe(
+                        dialogue_history=self.dm.history,
+                        turn_no=record["turn"],
+                        metrics_summary=metrics,
+                        scientific_summary=self._build_scientific_summary(),
+                    )
+                    self.last_observer_payload = self._serialize_observer_report(report)
+                    self.last_observer_report = self.last_observer_payload["report"]
+                    observer_path = OUT_DIR / f"observer_turn_{record['turn']:04d}.md"
+                    save_report_md(self.last_observer_report, observer_path)
+                except Exception as e:
+                    print(f"[Warning] Observer checkpoint failed: {e}", file=sys.stderr)
+
             # Store previous metrics for next validation
             self.previous_metrics = self.last_metrics
             self.last_metrics = metrics
@@ -233,7 +287,7 @@ def api_start():
         STATE.reset(env_index, agents_config, join_as_participant=join_as_participant)
     except RuntimeError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
-    
+
     return jsonify({
         "ok": True,
         "env": STATE.env_context,
@@ -255,6 +309,15 @@ def api_step():
         return jsonify({"ok": False, "error": "Session not initialized. Call /api/start"}), 400
 
     record, _ = STATE.dm.step()
+
+    # Multi-user: step() may return a "waiting" signal
+    if "waiting_for" in record:
+        return jsonify({
+            "ok": True,
+            "waiting_for": record["waiting_for"],
+            "turn": STATE.dm.turn_no,
+            "history": STATE.dm.history[-20:],
+        })
 
     STATE.logger.write_jsonl(record)
     STATE.logger.write_markdown(
@@ -280,6 +343,10 @@ def api_step():
         "scientific_report": STATE.last_scientific_report if STATE.dm.should_plot() else None,
         "validation_report": STATE.last_validation_report if STATE.dm.should_plot() else None,
         "has_validation_report": bool(STATE.last_validation_report) or bool(list(OUT_DIR.glob("validation_turn_*.md"))),
+        "observer_report": (STATE.last_observer_payload or {}).get("report"),
+        "observer_hypothesis_checks": (STATE.last_observer_payload or {}).get("hypothesis_checks", []),
+        "observer_hypothesis_summary": (STATE.last_observer_payload or {}).get("hypothesis_summary", ""),
+        "triangulation_summary": (STATE.last_observer_payload or {}).get("triangulation_summary", {}),
         "addressed_user": record.get("target") == "User",
     })
 
@@ -333,6 +400,10 @@ def api_user_message():
         "scientific_report": STATE.last_scientific_report if STATE.dm.should_plot() else None,
         "validation_report": STATE.last_validation_report if STATE.dm.should_plot() else None,
         "has_validation_report": bool(STATE.last_validation_report),
+        "observer_report": (STATE.last_observer_payload or {}).get("report"),
+        "observer_hypothesis_checks": (STATE.last_observer_payload or {}).get("hypothesis_checks", []),
+        "observer_hypothesis_summary": (STATE.last_observer_payload or {}).get("hypothesis_summary", ""),
+        "triangulation_summary": (STATE.last_observer_payload or {}).get("triangulation_summary", {}),
     })
 
 
@@ -356,7 +427,7 @@ def api_state():
     # Проверяем наличие файлов валидации
     validation_files = sorted(OUT_DIR.glob("validation_turn_*.md")) if OUT_DIR.exists() else []
     has_validation = bool(STATE.last_validation_report) or bool(validation_files)
-    
+
     return jsonify({
         "ok": True,
         "turn": STATE.dm.turn_no,
@@ -369,6 +440,10 @@ def api_state():
         "scientific_report": STATE.last_scientific_report,
         "validation_report": STATE.last_validation_report,
         "has_validation_report": has_validation,
+        "observer_report": (STATE.last_observer_payload or {}).get("report"),
+        "observer_hypothesis_checks": (STATE.last_observer_payload or {}).get("hypothesis_checks", []),
+        "observer_hypothesis_summary": (STATE.last_observer_payload or {}).get("hypothesis_summary", ""),
+        "triangulation_summary": (STATE.last_observer_payload or {}).get("triangulation_summary", {}),
     })
 
 
@@ -382,12 +457,12 @@ def api_scientific():
     """Get the latest scientific analysis report."""
     if not STATE.dm or not STATE.last_scientific_report:
         return jsonify({
-            "ok": True, 
-            "report": None, 
+            "ok": True,
+            "report": None,
             "hypotheses": [],
             "message": "No scientific analysis available yet. Run more dialogue turns."
         })
-    
+
     return jsonify({
         "ok": True,
         "report": STATE.last_scientific_report,
@@ -405,38 +480,20 @@ def api_observer():
     if len(history) < 3:
         return jsonify({"ok": False, "error": "Need at least 3 turns for observation"}), 400
 
-    # Prepare scientific summary dict if available
-    scientific_dict = None
-    if STATE.last_metrics and "scientific" in STATE.last_metrics:
-        sci = STATE.last_metrics["scientific"]
-        if hasattr(sci, "group_stage"):
-            scientific_dict = {
-                "group_stage": sci.group_stage,
-                "network_density": sci.network_density,
-                "dominant_emotion": sci.dominant_emotion,
-            }
-
     report = STATE.observer.observe(
         dialogue_history=history,
         turn_no=STATE.dm.turn_no,
         metrics_summary=STATE.last_metrics,
-        scientific_summary=scientific_dict,
+        scientific_summary=STATE._build_scientific_summary(),
     )
-    STATE.last_observer_report = STATE.observer.render_report(report)
+    STATE.last_observer_payload = STATE._serialize_observer_report(report)
+    STATE.last_observer_report = STATE.last_observer_payload["report"]
 
     # Save report to file
     report_path = OUT_DIR / f"observer_turn_{STATE.dm.turn_no:04d}.md"
     report_path.write_text(STATE.last_observer_report, encoding="utf-8")
 
-    return jsonify({
-        "ok": True,
-        "report": STATE.last_observer_report,
-        "convergence_score": report.convergence_score,
-        "agreements": report.agreements,
-        "divergences": report.divergences,
-        "novel_insights": report.novel_insights,
-        "triangulation_summary": STATE.observer.get_triangulation_summary(),
-    })
+    return jsonify({"ok": True, **STATE.last_observer_payload})
 
 
 @app.route("/api/observer/history", methods=["GET"])
@@ -500,11 +557,11 @@ def download_validation():
         # Сохраняем текущий отчёт в файл для скачивания
         turn = STATE.dm.turn_no if STATE.dm else 0
         temp_path = OUT_DIR / f"validation_turn_{turn:04d}_download.md"
-        
+
         try:
             with open(temp_path, 'w', encoding='utf-8') as f:
                 f.write(STATE.last_validation_report)
-            
+
             return send_file(
                 str(temp_path),
                 as_attachment=True,
@@ -514,15 +571,15 @@ def download_validation():
         except Exception as e:
             print(f"[Error] Failed to create validation download file: {e}", file=sys.stderr)
             # Fallback к поиску сохранённого файла
-    
+
     # Если нет в памяти, ищем последний сохранённый файл
     validation_files = sorted(OUT_DIR.glob("validation_turn_*.md"))
     if not validation_files:
         return jsonify({
-            "ok": False, 
+            "ok": False,
             "error": "No validation report available yet. Run more dialogue turns (validation runs every 5 turns)."
         }), 404
-    
+
     path = validation_files[-1]  # Последний файл
     turn = path.stem.split("_")[-1]  # Извлекаем номер хода
     return send_file(
@@ -531,6 +588,43 @@ def download_validation():
         download_name=f"hypothesis_validation_turn_{turn}.md",
         mimetype="text/markdown"
     )
+
+
+# ==================== MULTI-USER EXPERIMENT ENDPOINTS ====================
+
+@app.route("/experiment")
+def experiment_page():
+    return "<h1>Multi-user experiment mode is disabled</h1>", 410
+
+
+@app.route("/experiment/links")
+def experiment_links_page():
+    return "<h1>Multi-user experiment mode is disabled</h1>", 410
+
+
+@app.route("/api/experiment/start", methods=["POST"])
+def api_experiment_start():
+    return jsonify({"ok": False, "error": "Multi-user experiment mode is disabled"}), 410
+
+
+@app.route("/api/experiment/join", methods=["POST"])
+def api_experiment_join():
+    return jsonify({"ok": False, "error": "Multi-user experiment mode is disabled"}), 410
+
+
+@app.route("/api/experiment/step", methods=["POST"])
+def api_experiment_step():
+    return jsonify({"ok": False, "error": "Multi-user experiment mode is disabled"}), 410
+
+
+@app.route("/api/experiment/human_message", methods=["POST"])
+def api_experiment_human_message():
+    return jsonify({"ok": False, "error": "Multi-user experiment mode is disabled"}), 410
+
+
+@app.route("/api/experiment/status", methods=["GET"])
+def api_experiment_status():
+    return jsonify({"ok": False, "error": "Multi-user experiment mode is disabled"}), 410
 
 
 def create_app() -> Flask:

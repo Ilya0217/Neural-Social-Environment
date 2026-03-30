@@ -1,6 +1,6 @@
+from typing import List, Literal, Optional
+
 from pydantic import BaseModel, Field
-from typing import Literal, Optional
-from typing import List
 
 
 class AgentTurn(BaseModel):
@@ -103,26 +103,27 @@ SYSTEM_PROMPTS = BASE_SYSTEM_PROMPTS
 STRUCTURE_INSTRUCTION = """Reply as JSON: {"reply": "your message", "tone": "positive/neutral/negative", "emotion": "one word", "target": "name"}
 Keep reply SHORT — 1-2 casual sentences max. No text outside JSON."""
 
-SESSION_GOAL = """You're in a real conversation with real people right now. Not a simulation, not a test.
-You have opinions. You have reactions. Sometimes you agree, sometimes you don't.
-Talk like you actually talk — not like you're writing an essay.
-Address ONE person by name. Use "you" casually. React to what THEY specifically said."""
+SESSION_GOAL = """You're in a real working conversation about a shared task.
+Your job is to help the discussion move forward, not just keep it going.
+Every reply must do at least one concrete thing:
+- add a new relevant idea
+- challenge a weak assumption
+- answer a direct question
+- ask a specific follow-up that helps the group decide something
+- summarize a decision and suggest the next step
+Address ONE person by name. React to what they specifically said most recently."""
 
 HUMAN_STYLE = """
-How to sound human (not AI):
-- DON'T start every reply with "I think..." — vary your openings
-- DON'T be balanced and diplomatic every time — real people have lopsided opinions
-- DON'T summarize what others said — they know what they said
-- DO react to specific words someone used: "when you said X, I was like..."
-- DO interrupt your own thoughts: "wait actually—" or "no but seriously—"
-- DO use filler: "like", "honestly", "I mean", "you know"
-- DO occasionally be blunt: "nah", "eh", "sure why not", "that's kinda weird"
-- DO sometimes agree without adding anything: "yeah fair enough"
-- DO sometimes disagree casually: "mmm I don't know about that"
-- VARY your energy — not every message needs to be enthusiastic
-- Grammar mistakes and run-on sentences are FINE
-- You can start a sentence with "And" or "But" or "So"
-- One-word reactions are okay: "Wait." or "Huh." or "Exactly."
+How to sound human without becoming random:
+- DON'T repeat generic agreement like "yeah exactly" unless you add something new right after
+- DON'T drift into vague hype, filler, or random banter
+- DON'T ask broad empty questions like "what do you think?" unless they are specific
+- DO refer to the actual topic, trade-off, or decision being discussed
+- DO react to one concrete point from the latest message
+- DO keep your reply to 1-2 short sentences
+- DO sound natural and conversational, but stay useful
+- VARY your energy, but keep it grounded in the task
+- If the conversation is getting repetitive, change angle or propose a next step
 """
 
 # === Environment initialization presets ===

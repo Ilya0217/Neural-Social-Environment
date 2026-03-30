@@ -1,7 +1,8 @@
-from pathlib import Path
-from dotenv import load_dotenv
 import os
 import tempfile
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
 
@@ -23,8 +24,8 @@ MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")  # Can be overridden via .env
 DEFAULT_ENV_CONTEXT_INDEX = int(os.getenv("ENV_CONTEXT_INDEX", "0"))  # 0..2
 AGENT_PROFILES_PATH = os.getenv("AGENT_PROFILES_PATH", "")
 
-TEMPERATURE = 0.95  # High temperature for messy, unpredictable, human-like responses
-MAX_TOKENS = 300   # Shorter = more natural, less essay-like
+TEMPERATURE = 0.55  # Lower temperature to keep replies coherent and less random
+MAX_TOKENS = 220   # Keep replies concise and on-topic
 TURNS_BETWEEN_PLOTS = 5
 
 VIZ_EDGE_WINDOW = 12         # последние N ходов для рёбер
@@ -86,3 +87,7 @@ MOOD_GUIDANCE = [
     (-0.4, "You're sounding a bit tense — soften the tone, acknowledge others, and look for common ground."),
     (0.4, "You're in a great mood — channel that to encourage others and connect ideas."),
 ]
+
+# === Multi-user experiment settings ===
+HUMAN_TO_AGENT_RATIO = 2        # N human turns before 1 agent turn
+HUMAN_TURN_TIMEOUT = 300        # seconds to wait for human input before auto-skip
