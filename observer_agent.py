@@ -116,6 +116,23 @@ HYPOTHESIS_CATALOG: List[Dict[str, Any]] = [
 ]
 
 
+def get_hypothesis_registry() -> List[Dict[str, Any]]:
+    """Return a flat, UI-friendly registry of theory-backed hypotheses."""
+    registry: List[Dict[str, Any]] = []
+    for entry in HYPOTHESIS_CATALOG:
+        for hypothesis in entry["hypotheses"]:
+            registry.append(
+                {
+                    "theory": entry["theory"],
+                    "citation": entry["citation"],
+                    "hypothesis": hypothesis,
+                    "status": "pending",
+                    "evidence": "",
+                }
+            )
+    return registry
+
+
 @dataclass
 class ObservationReport:
     """Single observation report from the observer agent."""

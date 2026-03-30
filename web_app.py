@@ -39,7 +39,7 @@ from .config import (
 from .dialogue_manager import DialogueManager
 from .env_context import get_env_context_by_index, list_env_contexts
 from .io_logger import IOLogger
-from .observer_agent import ObserverAgent
+from .observer_agent import ObserverAgent, get_hypothesis_registry
 from .profiles import initialize_agents, initialize_agents_from_config
 from .scientific_analytics import (
     generate_scientific_hypotheses,
@@ -70,6 +70,8 @@ class AppState:
         self.observer: Optional[ObserverAgent] = None
         self.last_observer_report: str = ""
         self.last_observer_payload: Optional[Dict[str, Any]] = None
+        self.last_advanced_report: str = ""
+        self.last_advanced_data: Optional[Dict[str, Any]] = None
         self.user_participating: bool = False
         self._step_lock = threading.Lock()
 
@@ -132,6 +134,8 @@ class AppState:
         self.observer = ObserverAgent(client=self.client)
         self.last_observer_report = ""
         self.last_observer_payload = None
+        self.last_advanced_report = ""
+        self.last_advanced_data = None
 
         self.logger = IOLogger(
             jsonl_path=LOG_DIR / "dialog.jsonl",
@@ -191,6 +195,32 @@ class AppState:
             "triangulation_summary": self.observer.get_triangulation_summary() if self.observer else {},
         }
 
+    def _merge_hypothesis_registry(self) -> List[Dict[str, Any]]:
+        registry = get_hypothesis_registry()
+        latest_checks = {
+            (item.get("theory"), item.get("hypothesis")): item
+            for item in ((self.last_observer_payload or {}).get("hypothesis_checks", []) or [])
+        }
+        merged: List[Dict[str, Any]] = []
+        for item in registry:
+            match = latest_checks.get((item["theory"], item["hypothesis"]))
+            if match:
+                merged.append(
+                    {
+                        "theory": item["theory"],
+                        "citation": item["citation"],
+                        "hypothesis": item["hypothesis"],
+                        "status": match.get("status", "pending"),
+                        "evidence": match.get("evidence", ""),
+                    }
+                )
+            else:
+                merged.append(item)
+        return merged
+
+    def _build_advanced_summary(self) -> Optional[Dict[str, Any]]:
+        return self.last_advanced_data
+
     def compute_metrics_if_needed(self, record: Dict[str, Any]):
         """Compute graphs, metrics, hypotheses if should_plot(). Returns (image_url, metrics_md, hyps)."""
         image_url = None
@@ -244,6 +274,23 @@ class AppState:
                     print(f"[Warning] Hypothesis validation failed: {e}", file=sys.stderr)
                     self.last_validation_report = ""
 
+            try:
+                advanced_result = compute_advanced_analysis(self.dm.history, agents_order)
+                self.last_advanced_report = render_advanced_report(advanced_result, agents_order)
+                self.last_advanced_data = {
+                    "contagion_rate": advanced_result.emotional_contagion.contagion_rate,
+                    "most_contagious": advanced_result.emotional_contagion.most_contagious_agent,
+                    "most_susceptible": advanced_result.emotional_contagion.most_susceptible_agent,
+                    "group_lsm": advanced_result.language_style_matching.group_lsm,
+                    "discourse_coherence": advanced_result.discourse_coherence.overall_coherence,
+                    "thread_continuity": advanced_result.discourse_coherence.thread_continuity,
+                    "topic_drift_points": advanced_result.discourse_coherence.topic_drift_points,
+                }
+            except Exception as e:
+                print(f"[Warning] Advanced analysis failed: {e}", file=sys.stderr)
+                self.last_advanced_report = ""
+                self.last_advanced_data = None
+
             if self.observer and len(self.dm.history) >= 3:
                 try:
                     report = self.observer.observe(
@@ -251,6 +298,7 @@ class AppState:
                         turn_no=record["turn"],
                         metrics_summary=metrics,
                         scientific_summary=self._build_scientific_summary(),
+                        advanced_summary=self._build_advanced_summary(),
                     )
                     self.last_observer_payload = self._serialize_observer_report(report)
                     self.last_observer_report = self.last_observer_payload["report"]
@@ -299,6 +347,7 @@ def api_start():
             {"name": name, **meta}
             for name, meta in STATE.agents_meta.items()
         ],
+        "hypothesis_registry": STATE._merge_hypothesis_registry(),
         "user_participating": STATE.user_participating,
     })
 
@@ -346,6 +395,7 @@ def api_step():
         "observer_report": (STATE.last_observer_payload or {}).get("report"),
         "observer_hypothesis_checks": (STATE.last_observer_payload or {}).get("hypothesis_checks", []),
         "observer_hypothesis_summary": (STATE.last_observer_payload or {}).get("hypothesis_summary", ""),
+        "hypothesis_registry": STATE._merge_hypothesis_registry(),
         "triangulation_summary": (STATE.last_observer_payload or {}).get("triangulation_summary", {}),
         "addressed_user": record.get("target") == "User",
     })
@@ -403,6 +453,7 @@ def api_user_message():
         "observer_report": (STATE.last_observer_payload or {}).get("report"),
         "observer_hypothesis_checks": (STATE.last_observer_payload or {}).get("hypothesis_checks", []),
         "observer_hypothesis_summary": (STATE.last_observer_payload or {}).get("hypothesis_summary", ""),
+        "hypothesis_registry": STATE._merge_hypothesis_registry(),
         "triangulation_summary": (STATE.last_observer_payload or {}).get("triangulation_summary", {}),
     })
 
@@ -443,6 +494,7 @@ def api_state():
         "observer_report": (STATE.last_observer_payload or {}).get("report"),
         "observer_hypothesis_checks": (STATE.last_observer_payload or {}).get("hypothesis_checks", []),
         "observer_hypothesis_summary": (STATE.last_observer_payload or {}).get("hypothesis_summary", ""),
+        "hypothesis_registry": STATE._merge_hypothesis_registry(),
         "triangulation_summary": (STATE.last_observer_payload or {}).get("triangulation_summary", {}),
     })
 
@@ -485,6 +537,7 @@ def api_observer():
         turn_no=STATE.dm.turn_no,
         metrics_summary=STATE.last_metrics,
         scientific_summary=STATE._build_scientific_summary(),
+        advanced_summary=STATE._build_advanced_summary(),
     )
     STATE.last_observer_payload = STATE._serialize_observer_report(report)
     STATE.last_observer_report = STATE.last_observer_payload["report"]
@@ -493,7 +546,11 @@ def api_observer():
     report_path = OUT_DIR / f"observer_turn_{STATE.dm.turn_no:04d}.md"
     report_path.write_text(STATE.last_observer_report, encoding="utf-8")
 
-    return jsonify({"ok": True, **STATE.last_observer_payload})
+    return jsonify({
+        "ok": True,
+        **STATE.last_observer_payload,
+        "hypothesis_registry": STATE._merge_hypothesis_registry(),
+    })
 
 
 @app.route("/api/observer/history", methods=["GET"])
@@ -513,6 +570,13 @@ def api_advanced():
     """Get advanced analytics: emotional contagion, LSM, discourse coherence."""
     if not STATE.dm or len(STATE.dm.history) < 3:
         return jsonify({"ok": True, "report": None, "message": "Need at least 3 turns."})
+
+    if STATE.last_advanced_report and STATE.last_advanced_data:
+        return jsonify({
+            "ok": True,
+            "report": STATE.last_advanced_report,
+            "data": STATE.last_advanced_data,
+        })
 
     agents_list = [a.name for a in STATE.dm.agents]
     result = compute_advanced_analysis(STATE.dm.history, agents_list)

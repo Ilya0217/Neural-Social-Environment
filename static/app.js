@@ -416,7 +416,7 @@ async function startSession() {
     renderMetrics('');
     renderScientificReport('');
     renderScientificHypotheses([]);
-    renderObserverHypothesisChecks([]);
+    renderObserverAnalysis({ hypothesis_registry: data.hypothesis_registry || [] });
     renderTriangulationSummary({});
     if (observerReportEl) {
       observerReportEl.innerHTML = '<p style="color: var(--text-secondary); padding: 2rem; text-align: center;">Observer checkpoints will appear automatically after 5 dialogue turns.</p>';
@@ -624,7 +624,7 @@ function renderScientificHypotheses(hypotheses) {
 function renderObserverHypothesisChecks(checks, summary = '') {
   if (!observerHypothesisChecksEl) return;
   if (!checks || checks.length === 0) {
-    observerHypothesisChecksEl.innerHTML = '<p style="color: var(--text-secondary); padding: 2rem; text-align: center;">Every 5 turns the observer will automatically check theory-based hypotheses here.</p>';
+    observerHypothesisChecksEl.innerHTML = '<p style="color: var(--text-secondary); padding: 2rem; text-align: center;">The theory-backed hypothesis list will appear here when the dialogue starts.</p>';
     return;
   }
 
@@ -635,28 +635,50 @@ function renderObserverHypothesisChecks(checks, summary = '') {
     insufficient_data: { label: 'Insufficient data', bg: 'rgba(148,163,184,0.16)', color: '#cbd5e1' },
   };
 
+  const groups = {
+    confirmed: [],
+    partial: [],
+    not_confirmed: [],
+    insufficient_data: [],
+    pending: [],
+  };
+  checks.forEach((check) => {
+    const key = groups[check.status] ? check.status : 'pending';
+    groups[key].push(check);
+  });
+
+  const renderGroup = (title, items) => {
+    if (!items.length) return '';
+    let section = `<div style="margin-bottom:1.1rem;"><h3 style="margin:0 0 0.8rem 0;">${title}</h3>`;
+    items.forEach((check) => {
+      const meta = statusMeta[check.status] || { label: 'Pending', bg: 'rgba(99,102,241,0.16)', color: '#a5b4fc' };
+      section += `
+        <div style="border:1px solid var(--border);border-radius:16px;padding:1rem;margin-bottom:0.9rem;background:rgba(255,255,255,0.02);">
+          <div style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-start;margin-bottom:0.45rem;">
+            <div>
+              <div style="font-weight:700;">${escapeHtml(check.theory || 'Theory')}</div>
+              <div style="font-size:12px;color:var(--text-dim);">${escapeHtml(check.citation || '')}</div>
+            </div>
+            <span style="white-space:nowrap;padding:0.3rem 0.7rem;border-radius:999px;background:${meta.bg};color:${meta.color};font-size:12px;font-weight:700;">${meta.label}</span>
+          </div>
+          <div style="font-size:13px;line-height:1.45;margin-bottom:0.45rem;"><strong>Hypothesis:</strong> ${escapeHtml(check.hypothesis || '')}</div>
+          <div style="font-size:13px;line-height:1.45;color:var(--text-secondary);"><strong>Evidence:</strong> ${escapeHtml(check.evidence || (check.status === 'pending' ? 'Not checked yet. First observer checkpoint runs after turn 5.' : 'No evidence provided.'))}</div>
+        </div>
+      `;
+    });
+    section += '</div>';
+    return section;
+  };
+
   let html = '<div style="padding:1rem;">';
   if (summary) {
     html += `<div style="margin-bottom:1rem;padding:0.9rem 1rem;border:1px solid var(--border);border-radius:14px;background:rgba(255,255,255,0.02);">${escapeHtml(summary)}</div>`;
   }
-
-  checks.forEach((check) => {
-    const meta = statusMeta[check.status] || statusMeta.insufficient_data;
-    html += `
-      <div style="border:1px solid var(--border);border-radius:16px;padding:1rem;margin-bottom:0.9rem;background:rgba(255,255,255,0.02);">
-        <div style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-start;margin-bottom:0.45rem;">
-          <div>
-            <div style="font-weight:700;">${escapeHtml(check.theory || 'Theory')}</div>
-            <div style="font-size:12px;color:var(--text-dim);">${escapeHtml(check.citation || '')}</div>
-          </div>
-          <span style="white-space:nowrap;padding:0.3rem 0.7rem;border-radius:999px;background:${meta.bg};color:${meta.color};font-size:12px;font-weight:700;">${meta.label}</span>
-        </div>
-        <div style="font-size:13px;line-height:1.45;margin-bottom:0.45rem;"><strong>Hypothesis:</strong> ${escapeHtml(check.hypothesis || '')}</div>
-        <div style="font-size:13px;line-height:1.45;color:var(--text-secondary);"><strong>Evidence:</strong> ${escapeHtml(check.evidence || 'No evidence provided.')}</div>
-      </div>
-    `;
-  });
-
+  html += renderGroup('Confirmed', groups.confirmed);
+  html += renderGroup('Partially Confirmed', groups.partial);
+  html += renderGroup('Not Confirmed', groups.not_confirmed);
+  html += renderGroup('Insufficient Data', groups.insufficient_data);
+  html += renderGroup('Pending Check', groups.pending);
   html += '</div>';
   observerHypothesisChecksEl.innerHTML = html;
 }
@@ -693,7 +715,7 @@ function renderObserverAnalysis(data) {
     observerReportEl.innerHTML = renderMarkdown(data.report);
   }
   renderObserverHypothesisChecks(
-    (data && (data.observer_hypothesis_checks || data.hypothesis_checks)) || [],
+    (data && (data.hypothesis_registry || data.observer_hypothesis_checks || data.hypothesis_checks)) || [],
     (data && (data.observer_hypothesis_summary || data.hypothesis_summary)) || ''
   );
   renderTriangulationSummary((data && data.triangulation_summary) || {});
