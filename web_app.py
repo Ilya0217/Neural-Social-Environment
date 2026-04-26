@@ -80,7 +80,10 @@ class AppState:
         if not OPENAI_API_KEY:
             raise RuntimeError("OPENAI_API_KEY is not set")
 
-        self.client = OpenAI(**({"base_url": OPENAI_BASE_URL} if OPENAI_BASE_URL else {}))
+        client_kwargs: Dict[str, Any] = {"api_key": OPENAI_API_KEY}
+        if OPENAI_BASE_URL:
+            client_kwargs["base_url"] = OPENAI_BASE_URL
+        self.client = OpenAI(**client_kwargs)
 
         options = list_env_contexts()
         idx = env_index if 0 <= env_index < len(options) else DEFAULT_ENV_CONTEXT_INDEX

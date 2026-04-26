@@ -133,6 +133,15 @@ def get_hypothesis_registry() -> List[Dict[str, Any]]:
     return registry
 
 
+VALID_HYPOTHESIS_STATUSES = {
+    "confirmed",
+    "partial",
+    "not_confirmed",
+    "insufficient_data",
+    "pending",
+}
+
+
 @dataclass
 class ObservationReport:
     """Single observation report from the observer agent."""
@@ -170,6 +179,55 @@ class ObserverAgent:
         if not self.model:
             from .config import MODEL
             self.model = MODEL
+
+    def _normalize_hypothesis_checks(self, raw_checks: Any) -> List[Dict[str, Any]]:
+        """Return a complete, sanitized hypothesis checklist aligned with the registry."""
+        registry = get_hypothesis_registry()
+        by_key: Dict[tuple[str, str], Dict[str, Any]] = {}
+
+        if isinstance(raw_checks, list):
+            for item in raw_checks:
+                if not isinstance(item, dict):
+                    continue
+                theory = str(item.get("theory", "") or "").strip()
+                hypothesis = str(item.get("hypothesis", "") or "").strip()
+                if not theory or not hypothesis:
+                    continue
+                status = str(item.get("status", "insufficient_data") or "").strip().lower()
+                if status not in VALID_HYPOTHESIS_STATUSES:
+                    status = "insufficient_data"
+                by_key[(theory, hypothesis)] = {
+                    "theory": theory,
+                    "citation": str(item.get("citation", "") or "").strip(),
+                    "hypothesis": hypothesis,
+                    "status": status,
+                    "evidence": str(item.get("evidence", "") or "").strip(),
+                }
+
+        normalized: List[Dict[str, Any]] = []
+        for item in registry:
+            key = (item["theory"], item["hypothesis"])
+            if key in by_key:
+                normalized.append(
+                    {
+                        "theory": item["theory"],
+                        "citation": item["citation"],
+                        "hypothesis": item["hypothesis"],
+                        "status": by_key[key]["status"],
+                        "evidence": by_key[key]["evidence"],
+                    }
+                )
+            else:
+                normalized.append(
+                    {
+                        "theory": item["theory"],
+                        "citation": item["citation"],
+                        "hypothesis": item["hypothesis"],
+                        "status": "insufficient_data",
+                        "evidence": "",
+                    }
+                )
+        return normalized
 
     def _build_observer_prompt(
         self,
@@ -348,11 +406,16 @@ Respond with ONLY a valid JSON object."""
                     report.divergences = data.get("divergences", [])
                     report.novel_insights = data.get("novel_insights", [])
                     report.hypothesis_summary = data.get("hypothesis_summary", "")
-                    report.hypothesis_checks = data.get("hypothesis_checks", [])
+                    report.hypothesis_checks = self._normalize_hypothesis_checks(
+                        data.get("hypothesis_checks", [])
+                    )
                     report.convergence_score = float(data.get("convergence_score", 0.0))
             except Exception as e:
                 print(f"[ObserverAgent] JSON parsing error: {e}", file=sys.stderr)
                 report.group_dynamics = f"Observation parsing failed: {str(e)}"
+
+        if not report.hypothesis_checks:
+            report.hypothesis_checks = self._normalize_hypothesis_checks([])
 
         self.history.append(report)
         return report

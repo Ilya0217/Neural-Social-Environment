@@ -18,9 +18,9 @@ OUT_DIR = Path(os.getenv("AGENT_OUTPUT_DIR") or (RUNTIME_BASE / "outputs"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", None)  # e.g. https://openrouter.ai/api/v1
-MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")  # Can be overridden via .env
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_BASE_URL = (os.getenv("OPENAI_BASE_URL", "") or "").strip() or None  # e.g. https://openrouter.ai/api/v1
+MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()  # Can be overridden via .env, incl. OpenRouter model ids
 DEFAULT_ENV_CONTEXT_INDEX = int(os.getenv("ENV_CONTEXT_INDEX", "0"))  # 0..2
 AGENT_PROFILES_PATH = os.getenv("AGENT_PROFILES_PATH", "")
 
