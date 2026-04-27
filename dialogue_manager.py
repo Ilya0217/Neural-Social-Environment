@@ -36,6 +36,10 @@ class DialogueManager:
     turn_no: int = 0
     edges_window: List[Dict[str, Any]] = field(default_factory=list)  # для визуализаций последнего окна
     enable_validation: bool = True  # Toggle validation on/off
+    enable_cot: bool = False  # Inject Chain-of-Thought instruction into system prompt (for H6 experiments)
+    strict_mode: bool = False  # If True, raise RuntimeError on API or persistent validation failure
+                                # instead of silently substituting fallback replies. Used in scientific
+                                # experiments where contaminated data destroys statistical inference.
     validation_pipeline: Optional[ValidationPipeline] = None
     phase_plan: List[Dict[str, Any]] = field(default_factory=lambda: list(DIALOGUE_PHASES))
     agent_moods: Dict[str, float] = field(default_factory=dict)
@@ -81,6 +85,20 @@ class DialogueManager:
         return (
             f"\n\nCURRENT PHASE [{phase['name'].upper()}]: {phase['instruction']}\n"
             "Shift the conversation forward accordingly."
+        )
+
+    def _cot_block(self) -> str:
+        """Chain-of-Thought instruction (Wei et al. 2022). Inserted only when enable_cot=True.
+        Used for H6 experiment: testing whether CoT prompting raises actionability_rate."""
+        if not self.enable_cot:
+            return ""
+        return (
+            "\n\nREASONING PROTOCOL (think step by step, internally, BEFORE you reply):\n"
+            "1. Identify the most important point or open question in the latest message.\n"
+            "2. Decide what is missing: a concrete next step, a constraint, an example, a risk, "
+            "a counter-argument, or an assignment of responsibility.\n"
+            "3. Compose a reply that adds exactly that missing piece — do not just acknowledge.\n"
+            "Do not output the reasoning steps themselves — only the final reply.\n"
         )
 
     def _context_style_block(self) -> str:
@@ -258,6 +276,48 @@ class DialogueManager:
             ),
         )
 
+    def _api_fallback(self, speaker_name: str, allowed_targets: List[str],
+                      reason: str) -> "AgentTurn":
+        """Reaction to API failure (rate limit, credits, network, etc.).
+
+        In strict_mode → propagates as RuntimeError so the calling experiment runner
+        can mark the dialogue as `error` instead of contaminating data with a
+        synthetic reply. This is critical for scientific experiments — silent
+        substitution of replies produces invalid metric distributions
+        (cf. H6 prerun 2026-04-26: credits exhausted mid-run, baseline arm got 0
+        real replies, p=2.6e-5 was an artifact of fallback strings).
+        """
+        import sys
+        if self.strict_mode:
+            raise RuntimeError(
+                f"DialogueManager API failure for '{speaker_name}' (strict_mode=True, "
+                f"no fallback): {reason}"
+            )
+        print(f"[Warning] API failure for {speaker_name}, using fallback: {reason}",
+              file=sys.stderr)
+        return AgentTurn(
+            reply="I'm here, but having trouble responding right now...",
+            tone="neutral", emotion="neutral",
+            target=self._choose_fallback_target(speaker_name, allowed_targets),
+        )
+
+    def _validation_fallback(self, speaker_name: str,
+                              allowed_targets: List[str]) -> "AgentTurn":
+        """Reaction to persistent validation failure after retry attempts."""
+        import sys
+        if self.strict_mode:
+            raise RuntimeError(
+                f"DialogueManager validation failure for '{speaker_name}' "
+                f"(strict_mode=True, no fallback): all retries failed CRITICAL validation"
+            )
+        print("[Validation] All regeneration attempts failed, using safe fallback",
+              file=sys.stderr)
+        return AgentTurn(
+            reply="Hmm, let me think about that for a moment...",
+            tone="neutral", emotion="thoughtful",
+            target=self._choose_fallback_target(speaker_name, allowed_targets),
+        )
+
     def _reply_needs_regeneration(self, reply: str, speaker_name: str) -> bool:
         """Reject vague or repetitive replies before they enter the transcript."""
         normalized = (reply or "").strip().lower()
@@ -327,6 +387,7 @@ class DialogueManager:
         target_order = [a.name for a in sorted(self.agents, key=lambda x: target_counts.get(x.name, 0)) if a.name != self.agents[agent_idx].name]
         phase_block = self._phase_block()
         context_style_block = self._context_style_block()
+        cot_block = self._cot_block()
         mood_block = self._mood_guidance(agent.name)
         # Инструкция про живых пользователей
         human_block = ""
@@ -356,6 +417,7 @@ class DialogueManager:
             + human_block
             + phase_block
             + context_style_block
+            + cot_block
             + mood_block
             + ("\nYou haven't talked much to: " + ", ".join(target_order[:2]) + "\n" if target_order else "")
             + (
@@ -811,12 +873,7 @@ class DialogueManager:
             try:
                 parsed = self.model_turn(messages, allowed_targets, agent=speaker)
             except RuntimeError as e:
-                print(f"[Warning] Failed to generate response for {speaker.name}: {e}", file=sys.stderr)
-                parsed = AgentTurn(
-                    reply="I'm here, but having trouble responding right now...",
-                    tone="neutral", emotion="neutral",
-                    target=self._choose_fallback_target(speaker.name, allowed_targets),
-                )
+                parsed = self._api_fallback(speaker.name, allowed_targets, str(e))
 
             self.turn_no += 1
             target = normalize_target(parsed.target)
@@ -851,12 +908,7 @@ class DialogueManager:
                         except Exception as e:
                             print(f"[Validation] Retry {retry+1} failed: {e}", file=sys.stderr)
                     if not is_valid:
-                        parsed = AgentTurn(
-                            reply="Hmm, let me think about that for a moment...",
-                            tone="neutral",
-                            emotion="thoughtful",
-                            target=self._choose_fallback_target(speaker.name, allowed_targets),
-                        )
+                        parsed = self._validation_fallback(speaker.name, allowed_targets)
                         target = normalize_target(parsed.target)
 
             record = {
@@ -908,16 +960,7 @@ class DialogueManager:
             try:
                 parsed: AgentTurn = self.model_turn(messages, allowed_targets, agent=speaker)
             except RuntimeError as e:
-                # Если все API вызовы не удались (например, rate limit), используем fallback-ответ
-                import sys
-                print(f"[Warning] Failed to generate response for {speaker.name}, using fallback: {e}", file=sys.stderr)
-                # Создаём простой fallback-ответ
-                parsed = AgentTurn(
-                    reply=f"I'm here, but I'm having trouble responding right now. Let me think about what was said...",
-                    tone="neutral",
-                    emotion="neutral",
-                    target=self._choose_fallback_target(speaker.name, allowed_targets),
-                )
+                parsed = self._api_fallback(speaker.name, allowed_targets, str(e))
 
             if not getattr(speaker, "is_human", False):
                 for _ in range(2):
@@ -990,15 +1033,9 @@ class DialogueManager:
                     except Exception as e:
                         print(f"[Validation] Regeneration attempt {retry_attempt + 1} failed: {e}", file=sys.stderr)
 
-                # Если после 2 попыток всё ещё CRITICAL — safe fallback
+                # Если после 2 попыток всё ещё CRITICAL — safe fallback (или raise в strict_mode)
                 if not is_valid:
-                    print("[Validation] All regeneration attempts failed, using safe fallback", file=sys.stderr)
-                    parsed = AgentTurn(
-                        reply="Hmm, let me think about that for a moment...",
-                        tone="neutral",
-                        emotion="thoughtful",
-                        target=self._choose_fallback_target(speaker.name, allowed_targets),
-                    )
+                    parsed = self._validation_fallback(speaker.name, allowed_targets)
                     target = normalize_target(parsed.target)
                     self._adjust_mood(speaker.name, parsed.tone, target)
 

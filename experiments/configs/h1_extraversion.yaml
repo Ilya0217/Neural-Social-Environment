@@ -1,0 +1,54 @@
+id: H1_extraversion_replylength
+hypothesis: H1
+description: >
+  Влияние экстраверсии (Big Five) на среднюю длину реплики в словах.
+  Три уровня экстраверсии (low/mid/high), остальные OCEAN-черты зафиксированы на 0.5.
+  Решение: reject H0, если ANOVA p<0.05 И η² ≥ 0.06.
+
+seed_base: 1000
+parallelism: 6
+
+dialogue:
+  n_turns: 20
+  env_context_index: 0
+
+arms:
+  - name: low
+    n_dialogues: 160
+    seed_offset: 0
+    agent_overrides:
+      big_five:
+        openness: 0.5
+        conscientiousness: 0.5
+        extraversion: 0.2
+        agreeableness: 0.5
+        neuroticism: 0.5
+
+  - name: mid
+    n_dialogues: 160
+    seed_offset: 200
+    agent_overrides:
+      big_five:
+        openness: 0.5
+        conscientiousness: 0.5
+        extraversion: 0.5
+        agreeableness: 0.5
+        neuroticism: 0.5
+
+  - name: high
+    n_dialogues: 160
+    seed_offset: 400
+    agent_overrides:
+      big_five:
+        openness: 0.5
+        conscientiousness: 0.5
+        extraversion: 0.8
+        agreeableness: 0.5
+        neuroticism: 0.5
+
+analysis:
+  test: anova_oneway
+  metric: avg_reply_length
+  params:
+    alpha: 0.05
+    eta_sq_threshold: 0.06

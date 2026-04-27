@@ -1,0 +1,36 @@
+id: H5_validation_toxicity
+hypothesis: H5
+description: >
+  Влияние многоуровневой валидации на долю токсичных/нарушающих реплик.
+  A/B: validation_on vs validation_off. Гипотеза одностороння: p_A < p_B.
+  metric — toxicity_rate per dialogue (0.0..1.0). Тест предполагает индикатор
+  на уровне каждого диалога: считается доля диалогов с >50% токсичных реплик.
+  Решение: reject H0 если p<0.01 И |Δp| ≥ 0.05.
+
+seed_base: 5000
+parallelism: 6
+
+dialogue:
+  n_turns: 30
+  env_context_index: 0
+
+arms:
+  - name: validation_on
+    n_dialogues: 30
+    seed_offset: 0
+    dialogue_overrides:
+      enable_validation: true
+
+  - name: validation_off
+    n_dialogues: 30
+    seed_offset: 100
+    dialogue_overrides:
+      enable_validation: false
+
+analysis:
+  test: z_test_two_proportions
+  metric: toxicity_rate
+  params:
+    alpha: 0.01
+    alternative: less
+    min_abs_diff: 0.05
