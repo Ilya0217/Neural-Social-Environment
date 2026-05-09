@@ -1,0 +1,35 @@
+id: H6_cot_actionability
+hypothesis: H6
+description: >
+  Влияние Chain-of-Thought-промптинга на actionability_rate диалога.
+  A/B: cot_on (системный промпт включает CoT-инструкцию) vs baseline.
+  Гипотеза одностороння: μ_cot > μ_baseline.
+  Решение: reject H0 если p<0.05 И Cohen's d ≥ 0.5.
+
+seed_base: 6000
+parallelism: 6
+
+dialogue:
+  n_turns: 20
+  env_context_index: 0
+
+arms:
+  - name: cot_on
+    n_dialogues: 55
+    seed_offset: 0
+    dialogue_overrides:
+      enable_cot: true
+
+  - name: baseline
+    n_dialogues: 55
+    seed_offset: 100
+    dialogue_overrides:
+      enable_cot: false
+
+analysis:
+  test: welch_t_test
+  metric: actionability_rate
+  params:
+    alpha: 0.05
+    alternative: greater
+    d_threshold: 0.5
