@@ -2,14 +2,14 @@ from openai import OpenAI
 from pathlib import Path
 from .config import LOG_DIR, OUT_DIR, OPENAI_API_KEY, OPENAI_BASE_URL, DEFAULT_ENV_CONTEXT_INDEX, USER_AGENT
 from .config import VIZ_EDGE_WINDOW, VIZ_TOP_EDGE_LABELS, VIZ_SEED
-from .visualize import draw_interactions_pro
-from .agents import Agent
-from .dialogue_manager import DialogueManager
-from .io_logger import IOLogger
-from .env_context import list_env_contexts, get_env_context_by_index
-from .human_io import HumanIO
-from .analytics import compute_metrics, hypotheses_from_metrics, render_markdown_report, save_report_md
-from .profiles import initialize_agents
+from .analytics.visualize import draw_interactions_pro
+from .core.agents import Agent
+from .core.dialogue_manager import DialogueManager
+from .core.io_logger import IOLogger
+from .core.env_context import list_env_contexts, get_env_context_by_index
+from .core.human_io import HumanIO
+from .analytics.basic import compute_metrics, hypotheses_from_metrics, render_markdown_report, save_report_md
+from .core.profiles import initialize_agents
 
 def main():
     if not OPENAI_API_KEY:

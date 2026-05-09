@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
-from .config import DEFAULT_AGENTS, AGENT_PROFILES_PATH
+from ..config import DEFAULT_AGENTS, AGENT_PROFILES_PATH
 from .agents import Agent
 
 QUESTION_BANK = [
@@ -244,7 +244,7 @@ def _generate_big_five_via_llm(client: Any, name: str, nature: str, answers: Dic
     that are psychologically consistent with the described behavior.
     """
     from .agents import BigFiveProfile
-    from .config import MODEL
+    from ..config import MODEL
     import re
 
     # Build context from questionnaire answers
@@ -306,7 +306,7 @@ def _generate_persona_via_llm(client: Any, name: str, nature: str, answers: Dict
     Instead of templated persona text, the LLM creates a natural backstory 
     with speech habits, quirks, and personality that's consistent with the questionnaire.
     """
-    from .config import MODEL
+    from ..config import MODEL
     
     context_lines = [f"Name: {name}", f"Role: {nature}"]
     for key, val in answers.items():

@@ -19,7 +19,7 @@ import math
 from collections import Counter, defaultdict
 from datetime import datetime
 
-from .scientific_analytics import (
+from .scientific import (
     compute_scientific_analysis,
     generate_scientific_hypotheses,
     render_scientific_report,

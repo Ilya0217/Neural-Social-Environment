@@ -1,6 +1,7 @@
 from typing import List, Dict, Any, Optional
 import json
 import re
+from ..config import MODEL
 from .prompts import AgentTurn
 
 class HumanIO:
@@ -31,7 +32,7 @@ class HumanIO:
         ]
         try:
             resp = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=MODEL,
                 temperature=0.0,
                 max_tokens=20,
                 messages=prompt,

@@ -14,8 +14,8 @@ from __future__ import annotations
 import unittest
 from unittest.mock import MagicMock, patch
 
-from agent_dialogue_sim.agents import Agent
-from agent_dialogue_sim.dialogue_manager import DialogueManager
+from agent_dialogue_sim.core.agents import Agent
+from agent_dialogue_sim.core.dialogue_manager import DialogueManager
 
 
 def _make_agents() -> list[Agent]:
@@ -99,7 +99,7 @@ class TestRunnerIntegration(unittest.TestCase):
     """experiment_runner._run_arm должен корректно ловить RuntimeError из strict_mode."""
 
     def test_run_arm_records_error_on_strict_failure(self):
-        from agent_dialogue_sim.experiment_runner import (
+        from agent_dialogue_sim.experiments.runner import (
             ArmConfig, DialogueConfig, AnalysisConfig, ExperimentConfig,
             ExperimentRunner,
         )

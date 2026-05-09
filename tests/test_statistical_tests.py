@@ -14,7 +14,7 @@ import unittest
 
 import numpy as np
 
-from agent_dialogue_sim.statistical_tests import (
+from agent_dialogue_sim.science.statistical_tests import (
     anova_oneway,
     tukey_hsd_pairs,
     chi_square_goodness_of_fit,
@@ -297,6 +297,127 @@ class TestEvaluateFamily(unittest.TestCase):
         for name in ("H1", "H6", "Hnull"):
             self.assertIn("p_adj_holm", family[name])
             self.assertIn("reject_after_holm", family[name])
+
+
+class TestAssumptionChecking(unittest.TestCase):
+    """Тесты для проверки предпосылок параметрических тестов."""
+
+    def test_normal_data_passes(self):
+        from agent_dialogue_sim.science.statistical_tests import check_test_assumptions
+        rng = np.random.default_rng(20)
+        a = rng.normal(10, 2, 50)
+        b = rng.normal(10, 2, 50)
+        report = check_test_assumptions(a, b)
+        self.assertTrue(report.assumptions_met)
+        self.assertEqual(len(report.normality_per_group), 2)
+        self.assertTrue(all(ng["normal_at_05"] for ng in report.normality_per_group))
+
+    def test_skewed_data_flags_normality(self):
+        from agent_dialogue_sim.science.statistical_tests import check_test_assumptions
+        rng = np.random.default_rng(21)
+        # Сильно скошенное распределение (экспоненциальное)
+        a = rng.exponential(2, 100)
+        b = rng.exponential(2, 100)
+        report = check_test_assumptions(a, b)
+        self.assertFalse(report.assumptions_met)
+        self.assertIn("non-parametric", report.recommendation.lower())
+
+    def test_unequal_variances_flags_homogeneity(self):
+        from agent_dialogue_sim.science.statistical_tests import check_test_assumptions
+        rng = np.random.default_rng(22)
+        a = rng.normal(10, 1, 50)
+        b = rng.normal(10, 5, 50)  # дисперсия в 25 раз больше
+        report = check_test_assumptions(a, b)
+        self.assertFalse(report.homogeneity["equal_variances_at_05"])
+        self.assertIn("Welch", report.recommendation)
+
+    def test_too_small_sample(self):
+        from agent_dialogue_sim.science.statistical_tests import check_test_assumptions
+        report = check_test_assumptions([1, 2], [3, 4])  # n=2 для каждой
+        # Не должно падать
+        self.assertEqual(len(report.normality_per_group), 2)
+        # n<3 → пропуск shapiro
+        self.assertIsNone(report.normality_per_group[0]["normal_at_05"])
+
+    def test_auto_choose_test_picks_welch_for_normal(self):
+        from agent_dialogue_sim.science.statistical_tests import auto_choose_test_two_samples
+        rng = np.random.default_rng(23)
+        a = rng.normal(10, 2, 30)
+        b = rng.normal(8, 2, 30)
+        result = auto_choose_test_two_samples(a, b, alternative="greater")
+        self.assertEqual(result.extra["auto_chosen"], "welch_t_test")
+        self.assertIn("assumption_report", result.extra)
+
+    def test_auto_choose_test_picks_mwu_for_skewed(self):
+        from agent_dialogue_sim.science.statistical_tests import auto_choose_test_two_samples
+        rng = np.random.default_rng(24)
+        a = rng.exponential(2, 100)
+        b = rng.exponential(3, 100)
+        result = auto_choose_test_two_samples(a, b)
+        self.assertEqual(result.extra["auto_chosen"], "mann_whitney_u")
+        self.assertTrue(result.extra.get("normality_violated"))
+
+
+class TestMixedEffectsModel(unittest.TestCase):
+    """Тесты иерархической модели — реплики внутри диалога."""
+
+    def test_detects_treatment_effect_with_clustered_data(self):
+        from agent_dialogue_sim.science.statistical_tests import mixed_effects_two_groups
+        rng = np.random.default_rng(30)
+        # 20 диалогов, по 10 реплик в каждом, эффект treatment = +0.5 + диалоговый шум
+        values, groups, clusters = [], [], []
+        for d_idx in range(40):
+            dialogue_offset = rng.normal(0, 0.3)  # random intercept
+            grp = "treatment" if d_idx < 20 else "control"
+            grp_effect = 0.5 if grp == "treatment" else 0.0
+            for _ in range(10):
+                values.append(0.5 + grp_effect + dialogue_offset + rng.normal(0, 0.2))
+                groups.append(grp)
+                clusters.append(d_idx)
+        result = mixed_effects_two_groups(values, groups, clusters, alpha=0.05)
+        self.assertEqual(result.test_name, "mixed_effects_lmm")
+        self.assertLess(result.p_value, 0.05)
+        self.assertEqual(result.extra["n_clusters"], 40)
+
+    def test_no_effect_fails_to_reject(self):
+        from agent_dialogue_sim.science.statistical_tests import mixed_effects_two_groups
+        rng = np.random.default_rng(31)
+        values, groups, clusters = [], [], []
+        for d_idx in range(30):
+            dialogue_offset = rng.normal(0, 0.3)
+            grp = "treatment" if d_idx < 15 else "control"
+            for _ in range(8):
+                values.append(0.5 + dialogue_offset + rng.normal(0, 0.2))
+                groups.append(grp)
+                clusters.append(d_idx)
+        result = mixed_effects_two_groups(values, groups, clusters, alpha=0.05)
+        self.assertGreater(result.p_value, 0.05)
+        self.assertEqual(result.decision, "fail_to_reject_H0")
+
+    def test_random_intercept_variance_estimated(self):
+        from agent_dialogue_sim.science.statistical_tests import mixed_effects_two_groups
+        rng = np.random.default_rng(32)
+        values, groups, clusters = [], [], []
+        for d_idx in range(20):
+            offset = rng.normal(0, 1.0)  # большая дисперсия между диалогами
+            grp = "a" if d_idx < 10 else "b"
+            for _ in range(8):
+                values.append(offset + rng.normal(0, 0.1))
+                groups.append(grp)
+                clusters.append(d_idx)
+        result = mixed_effects_two_groups(values, groups, clusters)
+        var = result.extra.get("random_intercept_var")
+        self.assertIsNotNone(var)
+        self.assertGreater(var, 0.1)
+
+    def test_validation_2_groups_required(self):
+        from agent_dialogue_sim.science.statistical_tests import mixed_effects_two_groups
+        with self.assertRaises(ValueError):
+            mixed_effects_two_groups(
+                [1, 2, 3, 4, 5, 6],
+                ["a", "a", "b", "b", "c", "c"],  # 3 группы
+                [1, 1, 2, 2, 3, 3],
+            )
 
 
 if __name__ == "__main__":

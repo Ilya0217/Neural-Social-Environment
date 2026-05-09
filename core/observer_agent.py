@@ -177,7 +177,7 @@ class ObserverAgent:
 
     def __post_init__(self):
         if not self.model:
-            from .config import MODEL
+            from ..config import MODEL
             self.model = MODEL
 
     def _normalize_hypothesis_checks(self, raw_checks: Any) -> List[Dict[str, Any]]:
@@ -348,7 +348,7 @@ Respond with ONLY a valid JSON object."""
         Returns:
             ObservationReport with qualitative analysis and triangulation data
         """
-        from .config import MAX_TOKENS, MODEL, TEMPERATURE
+        from ..config import MAX_TOKENS, MODEL, TEMPERATURE
 
         prompt = self._build_observer_prompt(
             dialogue_history, metrics_summary, scientific_summary, advanced_summary

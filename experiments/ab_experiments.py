@@ -34,10 +34,10 @@ from ..config import (
     OPENAI_BASE_URL,
     VIZ_EDGE_WINDOW,
 )
-from ..agents import Agent
-from ..dialogue_manager import DialogueManager
-from ..env_context import get_env_context_by_index
-from ..analytics import compute_metrics
+from ..core.agents import Agent
+from ..core.dialogue_manager import DialogueManager
+from ..core.env_context import get_env_context_by_index
+from ..analytics.basic import compute_metrics
 
 
 # =============================================================================

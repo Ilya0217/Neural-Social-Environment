@@ -35,7 +35,7 @@ from typing import Any, Callable, Sequence
 
 import yaml
 
-from agent_dialogue_sim import statistical_tests as st
+from ..science import statistical_tests as st
 
 logger = logging.getLogger(__name__)
 
@@ -180,13 +180,13 @@ def real_dispatcher(seed: int, arm: ArmConfig, dialogue_config: DialogueConfig) 
     """
     from openai import OpenAI
 
-    from agent_dialogue_sim.config import (
+    from ..config import (
         DEFAULT_AGENTS, OPENAI_API_KEY, OPENAI_BASE_URL, VIZ_EDGE_WINDOW,
     )
-    from agent_dialogue_sim.agents import Agent, BigFiveProfile
-    from agent_dialogue_sim.dialogue_manager import DialogueManager
-    from agent_dialogue_sim.env_context import get_env_context_by_index
-    from agent_dialogue_sim.analytics import compute_metrics
+    from ..core.agents import Agent, BigFiveProfile
+    from ..core.dialogue_manager import DialogueManager
+    from ..core.env_context import get_env_context_by_index
+    from ..analytics.basic import compute_metrics
 
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY is not set; cannot run real dispatcher")
@@ -398,7 +398,7 @@ class ExperimentRunner:
         Запускается только для real dispatcher; mock-режим пропускает."""
         if not self.check_credits or self.dispatcher is not real_dispatcher:
             return
-        from agent_dialogue_sim.api_credits_check import (
+        from ..science.api_credits_check import (
             check_credits, estimate_experiment_cost, CreditsExhaustedError, CreditsCheckError,
         )
         total_dialogues = sum(a.n_dialogues for a in self.config.arms)

@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_dialogue_sim.experiment_runner import (
+from agent_dialogue_sim.experiments.runner import (
     ArmConfig,
     DialogueConfig,
     AnalysisConfig,

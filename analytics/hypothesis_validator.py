@@ -17,17 +17,37 @@ from collections import defaultdict
 
 @dataclass
 class HypothesisValidation:
-    """Результат проверки гипотезы"""
+    """Результат проверки гипотезы.
+
+    Содержит ДВА уровня оценки:
+      1. Эвристический (`confidence`) — legacy, для обратной совместимости с web_app.
+         Считается по правилу "0.3 + бонусы за примеры/метрики". Это НЕ статистика.
+      2. Формально-статистический (`p_value`, `effect_size`, `decision_formal`) —
+         результат честного теста (scipy.stats / statsmodels) на временной серии
+         из `metrics_history`. Это то, что должно использоваться в научной защите.
+
+    Если formal-полей нет (None) — значит history слишком короткая (<3 снимков)
+    или для этой категории формальный тест ещё не реализован.
+    """
     hypothesis_id: str
     hypothesis_text: str
     framework: str
     status: str  # "confirmed", "rejected", "partial", "insufficient_data"
-    confidence: float  # 0.0 - 1.0
+    confidence: float  # 0.0 - 1.0 (HEURISTIC — не статистика)
     evidence: List[str]
     metrics_before: Optional[Dict[str, float]] = None
     metrics_after: Optional[Dict[str, float]] = None
     change_magnitude: Optional[float] = None
-    statistical_significance: Optional[float] = None
+    statistical_significance: Optional[float] = None  # legacy, not used
+    # === Формальная статистика (заполняется при достаточной history) ===
+    p_value: Optional[float] = None              # raw p-value of statistical test
+    effect_size: Optional[float] = None          # Cohen's d / r / etc.
+    effect_size_name: Optional[str] = None       # 'cohens_d' / 'spearman_rho' / ...
+    test_used: Optional[str] = None              # 'one_sample_t_test' / 'spearman' / ...
+    null_hypothesis: Optional[str] = None        # текст H0 для отчёта
+    alpha: float = 0.05
+    n_observations: Optional[int] = None
+    decision_formal: Optional[str] = None        # 'reject_H0' / 'fail_to_reject_H0' / None
 
 
 class HypothesisValidator:
@@ -49,6 +69,186 @@ class HypothesisValidator:
         # Храним только последние 20 снимков для экономии памяти
         if len(self.metrics_history) > 20:
             self.metrics_history = self.metrics_history[-20:]
+
+    # =====================================================================
+    # ФОРМАЛЬНЫЕ СТАТИСТИЧЕСКИЕ ТЕСТЫ
+    # =====================================================================
+    # В отличие от эвристического `confidence`, эти методы возвращают
+    # реальный p-value через scipy.stats. Если history слишком коротка
+    # (< MIN_OBS_FOR_TEST), возвращают None и валидатор работает только
+    # на эвристике.
+    # =====================================================================
+
+    MIN_OBS_FOR_TEST = 3  # минимум снимков для теста
+
+    def _extract_series(self, getter) -> List[float]:
+        """Извлечь скалярную метрику из metrics_history. getter — callable(metrics_dict) -> float|None."""
+        out = []
+        for _turn, m in self.metrics_history:
+            try:
+                v = getter(m)
+                if v is not None:
+                    out.append(float(v))
+            except (KeyError, TypeError, AttributeError):
+                continue
+        return out
+
+    def _formal_one_sample_test(
+        self,
+        getter,
+        threshold: float,
+        alternative: str = "greater",
+        alpha: float = 0.05,
+        d_threshold: float = 0.5,
+        h0_text: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Одновыборочный t-test: μ_metric vs threshold.
+        H0: μ = threshold; H1 зависит от alternative ('greater'/'less'/'two-sided').
+        Решение: reject_H0 если p < alpha И |Cohen's d| ≥ d_threshold.
+        """
+        from scipy import stats as scipy_stats
+        values = self._extract_series(getter)
+        if len(values) < self.MIN_OBS_FOR_TEST:
+            return None
+        try:
+            t_stat, p_val = scipy_stats.ttest_1samp(
+                values, popmean=threshold, alternative=alternative,
+            )
+        except Exception:
+            return None
+        mean_v = sum(values) / len(values)
+        if len(values) > 1:
+            var = sum((v - mean_v) ** 2 for v in values) / (len(values) - 1)
+            sd = var ** 0.5
+        else:
+            sd = 0.0
+        d = (mean_v - threshold) / sd if sd > 0 else 0.0
+        decision = (
+            "reject_H0"
+            if (p_val < alpha and abs(d) >= d_threshold)
+            else "fail_to_reject_H0"
+        )
+        return {
+            "test_used": "one_sample_t_test",
+            "p_value": float(p_val),
+            "effect_size": float(d),
+            "effect_size_name": "cohens_d",
+            "n_observations": len(values),
+            "alpha": alpha,
+            "null_hypothesis": h0_text or f"μ = {threshold}",
+            "decision_formal": decision,
+            "_aux": {"mean": mean_v, "sd": sd, "threshold": threshold,
+                     "alternative": alternative},
+        }
+
+    def _formal_trend_test(
+        self,
+        getter,
+        alpha: float = 0.05,
+        rho_threshold: float = 0.3,
+        h0_text: str = "no monotonic trend over time",
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Тест монотонного тренда метрики во времени через корреляцию Спирмена.
+        H0: ρ = 0 (нет тренда); H1: ρ ≠ 0.
+        """
+        from scipy import stats as scipy_stats
+        values = self._extract_series(getter)
+        if len(values) < self.MIN_OBS_FOR_TEST:
+            return None
+        turns = list(range(len(values)))
+        try:
+            rho, p_val = scipy_stats.spearmanr(turns, values)
+        except Exception:
+            return None
+        if math.isnan(rho) or math.isnan(p_val):
+            return None
+        decision = (
+            "reject_H0"
+            if (p_val < alpha and abs(rho) >= rho_threshold)
+            else "fail_to_reject_H0"
+        )
+        return {
+            "test_used": "spearman_correlation",
+            "p_value": float(p_val),
+            "effect_size": float(rho),
+            "effect_size_name": "spearman_rho",
+            "n_observations": len(values),
+            "alpha": alpha,
+            "null_hypothesis": h0_text,
+            "decision_formal": decision,
+            "_aux": {"trend": "increasing" if rho > 0 else "decreasing"},
+        }
+
+    def _formal_proportion_test(
+        self,
+        successes: int,
+        n: int,
+        p_null: float = 0.5,
+        alternative: str = "greater",
+        alpha: float = 0.05,
+        diff_threshold: float = 0.1,
+        h0_text: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Биномиальный тест на пропорцию.
+        H0: p = p_null; H1 зависит от alternative.
+        Решение: reject_H0 если p_value < alpha И |p_obs - p_null| ≥ diff_threshold.
+        """
+        from scipy import stats as scipy_stats
+        if n <= 0:
+            return None
+        try:
+            res = scipy_stats.binomtest(successes, n, p=p_null, alternative=alternative)
+        except Exception:
+            return None
+        p_obs = successes / n
+        diff = p_obs - p_null
+        decision = (
+            "reject_H0"
+            if (res.pvalue < alpha and abs(diff) >= diff_threshold)
+            else "fail_to_reject_H0"
+        )
+        return {
+            "test_used": "binomial_test",
+            "p_value": float(res.pvalue),
+            "effect_size": float(diff),
+            "effect_size_name": "prop_diff",
+            "n_observations": n,
+            "alpha": alpha,
+            "null_hypothesis": h0_text or f"p = {p_null}",
+            "decision_formal": decision,
+            "_aux": {"p_observed": p_obs, "p_null": p_null,
+                     "alternative": alternative},
+        }
+
+    def _attach_formal_stats(self, validation: "HypothesisValidation",
+                              formal: Optional[Dict[str, Any]]) -> "HypothesisValidation":
+        """Записать формальные поля в HypothesisValidation."""
+        if formal is None:
+            return validation
+        validation.test_used = formal.get("test_used")
+        validation.p_value = formal.get("p_value")
+        validation.effect_size = formal.get("effect_size")
+        validation.effect_size_name = formal.get("effect_size_name")
+        validation.n_observations = formal.get("n_observations")
+        validation.alpha = formal.get("alpha", 0.05)
+        validation.null_hypothesis = formal.get("null_hypothesis")
+        validation.decision_formal = formal.get("decision_formal")
+        # Добавить в evidence строку с p-value
+        p = formal.get("p_value")
+        d = formal.get("effect_size")
+        ds = formal.get("effect_size_name", "?")
+        decision = formal.get("decision_formal", "?")
+        n = formal.get("n_observations", "?")
+        test = formal.get("test_used", "?")
+        marker = "✅" if decision == "reject_H0" else "❌"
+        validation.evidence.append(
+            f"{marker} Формальный тест: {test}, n={n}, p={p:.4g}, "
+            f"{ds}={d:.3f}, α={formal.get('alpha', 0.05)} → {decision.upper()}"
+        )
+        return validation
     
     def validate_hypothesis(
         self,
@@ -79,21 +279,119 @@ class HypothesisValidator:
         # Генерируем ID гипотезы
         hyp_id = f"{category}_{framework}_{hash(finding) % 10000}"
         
-        # Проверяем гипотезу в зависимости от категории
+        # Проверяем гипотезу в зависимости от категории — эвристический путь
         if category == "Group Development":
-            return self._validate_group_development(hyp_id, hypothesis, current_metrics, previous_metrics, history)
+            validation = self._validate_group_development(hyp_id, hypothesis, current_metrics, previous_metrics, history)
         elif category == "Network Structure":
-            return self._validate_network_structure(hyp_id, hypothesis, current_metrics, previous_metrics, history)
+            validation = self._validate_network_structure(hyp_id, hypothesis, current_metrics, previous_metrics, history)
         elif category == "Social Capital":
-            return self._validate_social_capital(hyp_id, hypothesis, current_metrics, previous_metrics, history)
+            validation = self._validate_social_capital(hyp_id, hypothesis, current_metrics, previous_metrics, history)
         elif category == "Emotional Climate":
-            return self._validate_emotional_climate(hyp_id, hypothesis, current_metrics, previous_metrics, history)
+            validation = self._validate_emotional_climate(hyp_id, hypothesis, current_metrics, previous_metrics, history)
         elif category == "Dialogue Structure":
-            return self._validate_dialogue_structure(hyp_id, hypothesis, current_metrics, previous_metrics, history)
+            validation = self._validate_dialogue_structure(hyp_id, hypothesis, current_metrics, previous_metrics, history)
         elif category == "Turn-Taking":
-            return self._validate_turn_taking(hyp_id, hypothesis, current_metrics, previous_metrics, history)
+            validation = self._validate_turn_taking(hyp_id, hypothesis, current_metrics, previous_metrics, history)
         else:
-            return self._validate_general(hyp_id, hypothesis, current_metrics, previous_metrics, history)
+            validation = self._validate_general(hyp_id, hypothesis, current_metrics, previous_metrics, history)
+
+        # === ФОРМАЛЬНАЯ СТАТИСТИКА — поверх эвристики ===
+        # Если history достаточна, прикрепляем результат честного теста.
+        # Это НЕ заменяет confidence, но даёт научно валидную оценку рядом.
+        formal = self._compute_formal_stats(category, finding)
+        return self._attach_formal_stats(validation, formal)
+
+    def _compute_formal_stats(self, category: str, finding: str) -> Optional[Dict[str, Any]]:
+        """
+        Подбирает подходящий формальный тест под категорию гипотезы.
+        Все тесты используют self.metrics_history (≥3 снимков для запуска).
+        Возвращает None если данных недостаточно.
+
+        Извлечение метрик из metrics: компонент `summary.window` или `summary.all`,
+        либо `scientific.<key>` в зависимости от категории.
+        """
+        def s_get(m, *path, default=None):
+            cur = m
+            for p in path:
+                if isinstance(cur, dict) and p in cur:
+                    cur = cur[p]
+                else:
+                    return default
+            return cur
+
+        if category == "Network Structure":
+            # H0: max degree centrality ≤ 0.5; H1: > 0.5 (high centralization)
+            return self._formal_one_sample_test(
+                getter=lambda m: max(
+                    (s_get(m, "scientific", "centrality_metrics", "in_degree", default={}) or {}).values() or [0]
+                ) if s_get(m, "scientific", "centrality_metrics", "in_degree") else None,
+                threshold=0.5,
+                alternative="greater",
+                d_threshold=0.5,
+                h0_text="μ(max in-degree centrality) ≤ 0.5",
+            )
+
+        if category == "Emotional Climate":
+            # H0: μ(avg_tone) = 0 (neutral); H1: ≠ 0
+            return self._formal_one_sample_test(
+                getter=lambda m: s_get(m, "summary", "window", "avg_tone"),
+                threshold=0.0,
+                alternative="two-sided",
+                d_threshold=0.5,
+                h0_text="μ(avg_tone) = 0 (нейтральная атмосфера)",
+            )
+
+        if category == "Social Capital":
+            # H0: group cohesion ≤ 0.5; H1: > 0.5
+            return self._formal_one_sample_test(
+                getter=lambda m: s_get(m, "scientific", "group_cohesion"),
+                threshold=0.5,
+                alternative="greater",
+                d_threshold=0.5,
+                h0_text="μ(group_cohesion) ≤ 0.5",
+            )
+
+        if category == "Turn-Taking":
+            # H0: Gini ≤ 0.4 (равные); H1: > 0.4 (неравные)
+            return self._formal_one_sample_test(
+                getter=lambda m: s_get(m, "scientific", "turn_taking", "gini_coefficient"),
+                threshold=0.4,
+                alternative="greater",
+                d_threshold=0.5,
+                h0_text="μ(Gini) ≤ 0.4 (распределение реплик равно)",
+            )
+
+        if category == "Dialogue Structure":
+            # Тест на тренд: actionability_rate растёт во времени?
+            return self._formal_trend_test(
+                getter=lambda m: s_get(m, "summary", "window", "actionability_rate"),
+                rho_threshold=0.3,
+                h0_text="actionability_rate не имеет монотонного тренда во времени",
+            )
+
+        if category == "Group Development":
+            # Доля снимков, классифицированных как доминирующая стадия
+            stages = []
+            for _t, m in self.metrics_history:
+                stage = s_get(m, "scientific", "group_stage", "stage")
+                if stage:
+                    stages.append(stage)
+            if len(stages) < self.MIN_OBS_FOR_TEST:
+                return None
+            from collections import Counter
+            counter = Counter(stages)
+            dominant_stage, hits = counter.most_common(1)[0]
+            # H0: dominant_stage — случайное (p=0.25 для 4 стадий); H1: > 0.25
+            return self._formal_proportion_test(
+                successes=hits,
+                n=len(stages),
+                p_null=0.25,
+                alternative="greater",
+                diff_threshold=0.25,
+                h0_text=f"P(stage='{dominant_stage}') = 0.25 (случайно среди 4 стадий)",
+            )
+
+        return None
     
     def _validate_group_development(
         self,

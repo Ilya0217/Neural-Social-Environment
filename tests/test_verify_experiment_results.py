@@ -15,7 +15,7 @@ from pathlib import Path
 
 import yaml
 
-from agent_dialogue_sim.verify_experiment_results import verify, render_text
+from agent_dialogue_sim.science.verify_experiment_results import verify, render_text
 
 
 def _write_results_dir(tmp: Path, config_id: str, arms: dict[str, list[dict]]) -> Path:

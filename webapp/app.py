@@ -16,9 +16,8 @@ from flask import (
 )
 from openai import OpenAI
 
-from .advanced_analytics import compute_advanced_analysis, render_advanced_report
-from .agents import Agent
-from .analytics import (
+from ..analytics.advanced import compute_advanced_analysis, render_advanced_report
+from ..analytics.basic import (
     compute_metrics,
     get_hypothesis_validation_report,
     get_scientific_hypotheses_full,
@@ -27,7 +26,12 @@ from .analytics import (
     save_report_md,
     validate_hypotheses,
 )
-from .config import (
+from ..analytics.scientific import (
+    generate_scientific_hypotheses,
+    render_scientific_report,
+)
+from ..analytics.visualize import draw_interactions_pro
+from ..config import (
     DEFAULT_ENV_CONTEXT_INDEX,
     LOG_DIR,
     OPENAI_API_KEY,
@@ -36,16 +40,12 @@ from .config import (
     VIZ_EDGE_WINDOW,
     VIZ_SEED,
 )
-from .dialogue_manager import DialogueManager
-from .env_context import get_env_context_by_index, list_env_contexts
-from .io_logger import IOLogger
-from .observer_agent import ObserverAgent, get_hypothesis_registry
-from .profiles import initialize_agents, initialize_agents_from_config
-from .scientific_analytics import (
-    generate_scientific_hypotheses,
-    render_scientific_report,
-)
-from .visualize import draw_interactions_pro
+from ..core.agents import Agent
+from ..core.dialogue_manager import DialogueManager
+from ..core.env_context import get_env_context_by_index, list_env_contexts
+from ..core.io_logger import IOLogger
+from ..core.observer_agent import ObserverAgent, get_hypothesis_registry
+from ..core.profiles import initialize_agents, initialize_agents_from_config
 
 app = Flask(
     __name__,
@@ -123,7 +123,7 @@ class AppState:
         self.user_participating = join_as_participant
         if join_as_participant:
             # Original single-user mode
-            from .config import USER_AGENT
+            from ..config import USER_AGENT
             user_agent = Agent(
                 name=USER_AGENT["name"],
                 nature=USER_AGENT["nature"],

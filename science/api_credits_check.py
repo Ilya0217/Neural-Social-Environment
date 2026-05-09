@@ -6,7 +6,7 @@ Pre-flight проверка баланса OpenRouter API ДО старта до
 обнаруживает проблему через 7.5 минут после её возникновения.
 
 Использование:
-    from agent_dialogue_sim.api_credits_check import check_credits, ensure_sufficient
+    from agent_dialogue_sim.science.api_credits_check import check_credits, ensure_sufficient
 
     info = check_credits()
     print(info["remaining_usd"])
@@ -69,7 +69,7 @@ def check_credits(api_key: Optional[str] = None,
     # Берём из config.py если не передано явно
     if api_key is None or base_url is None:
         try:
-            from agent_dialogue_sim.config import OPENAI_API_KEY, OPENAI_BASE_URL
+            from ..config import OPENAI_API_KEY, OPENAI_BASE_URL
             api_key = api_key or OPENAI_API_KEY
             base_url = base_url or OPENAI_BASE_URL
         except ImportError:

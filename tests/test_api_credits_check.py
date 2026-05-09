@@ -12,7 +12,7 @@ import json
 import unittest
 from unittest.mock import patch, MagicMock
 
-from agent_dialogue_sim.api_credits_check import (
+from agent_dialogue_sim.science.api_credits_check import (
     CreditsInfo,
     CreditsCheckError,
     CreditsExhaustedError,
@@ -48,7 +48,7 @@ class TestIsOpenRouter(unittest.TestCase):
 class TestCheckCredits(unittest.TestCase):
     def test_returns_remaining_balance(self):
         payload = {"data": {"total_credits": 5.00, "total_usage": 1.23}}
-        with patch("agent_dialogue_sim.api_credits_check.urlopen",
+        with patch("agent_dialogue_sim.science.api_credits_check.urlopen",
                    return_value=_mock_urlopen_response(payload)):
             info = check_credits(api_key="sk-or-v1-test",
                                   base_url="https://openrouter.ai/api/v1")
@@ -73,7 +73,7 @@ class TestCheckCredits(unittest.TestCase):
         bad_resp.read.return_value = b"not json at all"
         bad_resp.__enter__.return_value = bad_resp
         bad_resp.__exit__.return_value = False
-        with patch("agent_dialogue_sim.api_credits_check.urlopen",
+        with patch("agent_dialogue_sim.science.api_credits_check.urlopen",
                    return_value=bad_resp):
             with self.assertRaises(CreditsCheckError):
                 check_credits(api_key="sk-or-v1-test",
@@ -83,7 +83,7 @@ class TestCheckCredits(unittest.TestCase):
 class TestEnsureSufficient(unittest.TestCase):
     def test_passes_when_balance_sufficient(self):
         payload = {"data": {"total_credits": 5.00, "total_usage": 1.0}}
-        with patch("agent_dialogue_sim.api_credits_check.urlopen",
+        with patch("agent_dialogue_sim.science.api_credits_check.urlopen",
                    return_value=_mock_urlopen_response(payload)):
             info = ensure_sufficient(min_usd=0.50,
                                       api_key="sk-or-v1-test",
@@ -92,7 +92,7 @@ class TestEnsureSufficient(unittest.TestCase):
 
     def test_raises_when_balance_insufficient(self):
         payload = {"data": {"total_credits": 1.0, "total_usage": 0.95}}
-        with patch("agent_dialogue_sim.api_credits_check.urlopen",
+        with patch("agent_dialogue_sim.science.api_credits_check.urlopen",
                    return_value=_mock_urlopen_response(payload)):
             with self.assertRaises(CreditsExhaustedError) as ctx:
                 ensure_sufficient(min_usd=0.50,
@@ -105,7 +105,7 @@ class TestEnsureSufficient(unittest.TestCase):
     def test_raises_on_negative_balance(self):
         # Случай 2026-04-26: usage > total_credits
         payload = {"data": {"total_credits": 0.0, "total_usage": 0.23}}
-        with patch("agent_dialogue_sim.api_credits_check.urlopen",
+        with patch("agent_dialogue_sim.science.api_credits_check.urlopen",
                    return_value=_mock_urlopen_response(payload)):
             with self.assertRaises(CreditsExhaustedError):
                 ensure_sufficient(min_usd=0.10,
@@ -139,7 +139,7 @@ class TestRunnerCreditsIntegration(unittest.TestCase):
     при недостатке баланса."""
 
     def test_runner_blocks_on_insufficient_balance(self):
-        from agent_dialogue_sim.experiment_runner import (
+        from agent_dialogue_sim.experiments.runner import (
             ArmConfig, DialogueConfig, AnalysisConfig, ExperimentConfig,
             ExperimentRunner, real_dispatcher,
         )
@@ -155,17 +155,17 @@ class TestRunnerCreditsIntegration(unittest.TestCase):
                                    check_credits=True)
         # Mock баланс = $0
         payload = {"data": {"total_credits": 0.0, "total_usage": 0.0}}
-        with patch("agent_dialogue_sim.api_credits_check.urlopen",
+        with patch("agent_dialogue_sim.science.api_credits_check.urlopen",
                    return_value=_mock_urlopen_response(payload)):
             # Также мокаем base_url через config
-            with patch("agent_dialogue_sim.api_credits_check._is_openrouter",
+            with patch("agent_dialogue_sim.science.api_credits_check._is_openrouter",
                        return_value=True):
-                from agent_dialogue_sim.api_credits_check import CreditsExhaustedError
+                from agent_dialogue_sim.science.api_credits_check import CreditsExhaustedError
                 with self.assertRaises(CreditsExhaustedError):
                     runner._preflight_credits()
 
     def test_runner_skips_check_when_disabled(self):
-        from agent_dialogue_sim.experiment_runner import (
+        from agent_dialogue_sim.experiments.runner import (
             ArmConfig, DialogueConfig, AnalysisConfig, ExperimentConfig,
             ExperimentRunner, real_dispatcher,
         )
@@ -178,12 +178,12 @@ class TestRunnerCreditsIntegration(unittest.TestCase):
         runner = ExperimentRunner(cfg, dispatcher=real_dispatcher,
                                    check_credits=False)
         # urlopen НЕ должен вызываться
-        with patch("agent_dialogue_sim.api_credits_check.urlopen") as mock_urlopen:
+        with patch("agent_dialogue_sim.science.api_credits_check.urlopen") as mock_urlopen:
             runner._preflight_credits()
             mock_urlopen.assert_not_called()
 
     def test_runner_skips_for_mock_dispatcher(self):
-        from agent_dialogue_sim.experiment_runner import (
+        from agent_dialogue_sim.experiments.runner import (
             ArmConfig, DialogueConfig, AnalysisConfig, ExperimentConfig,
             ExperimentRunner, mock_dispatcher_factory,
         )
@@ -196,7 +196,7 @@ class TestRunnerCreditsIntegration(unittest.TestCase):
         dispatcher = mock_dispatcher_factory({"a": 0.5}, metric_name="actionability_rate")
         runner = ExperimentRunner(cfg, dispatcher=dispatcher, check_credits=True)
         # urlopen НЕ должен вызываться даже при check_credits=True для mock
-        with patch("agent_dialogue_sim.api_credits_check.urlopen") as mock_urlopen:
+        with patch("agent_dialogue_sim.science.api_credits_check.urlopen") as mock_urlopen:
             runner._preflight_credits()
             mock_urlopen.assert_not_called()
 

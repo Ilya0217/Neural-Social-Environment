@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from openai import OpenAI
 from pydantic import ValidationError
 
-from .config import (
+from ..config import (
     DIALOGUE_PHASES,
     HUMAN_TO_AGENT_RATIO,
     HUMAN_TURN_TIMEOUT,
@@ -20,9 +20,9 @@ from .config import (
     TURNS_BETWEEN_PLOTS,
     VIZ_EDGE_WINDOW,
 )
+from ..utils import normalize_target
 from .human_io import HumanIO
 from .prompts import HUMAN_STYLE, SESSION_GOAL, STRUCTURE_INSTRUCTION, AgentTurn
-from .utils import normalize_target
 from .validators import ValidationLevel, ValidationPipeline
 
 

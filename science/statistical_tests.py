@@ -457,6 +457,216 @@ def cohens_kappa(rater_a: Sequence, rater_b: Sequence,
 # Поправка на множественные сравнения
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Mixed-effects модель (для иерархических данных: реплики внутри диалога)
+# ---------------------------------------------------------------------------
+
+def mixed_effects_two_groups(values: Sequence[float],
+                              group: Sequence[str],
+                              cluster: Sequence,
+                              alpha: float = 0.05,
+                              d_threshold: float = 0.5) -> TestResult:
+    """
+    Линейная смешанная модель: value ~ group + (1 | cluster).
+
+    Когда применять: данные иерархические (например, реплики внутри одного диалога —
+    они зависимы; стандартный t-test даёт заниженные стандартные ошибки).
+
+    Параметры:
+      values  — зависимая переменная
+      group   — индикатор treatment vs control (2 уровня, строки)
+      cluster — id кластера (например, dialogue_id) — рандомный эффект
+
+    Тест значимости: фиксированный эффект group (Wald z-test).
+    Эффект-сайз: разность средних, стандартизованная по pooled SD.
+    """
+    import pandas as pd
+    import statsmodels.formula.api as smf
+
+    if not (len(values) == len(group) == len(cluster)):
+        raise ValueError("values, group, cluster must have same length")
+    if len(values) < 4:
+        raise ValueError("need >= 4 observations for mixed-effects model")
+
+    df = pd.DataFrame({"value": values, "group": list(group), "cluster": list(cluster)})
+    levels = sorted(df["group"].unique())
+    if len(levels) != 2:
+        raise ValueError(f"mixed_effects_two_groups requires 2 groups, got {levels}")
+
+    # Reference категория = первая по алфавиту; коэффициент при group[T.<other>]
+    md = smf.mixedlm("value ~ C(group)", df, groups=df["cluster"])
+    try:
+        result = md.fit(method="lbfgs", disp=False)
+    except Exception:
+        result = md.fit(reml=False, method="powell", disp=False)
+
+    # Вытаскиваем коэффициент при второй группе
+    treat_label = [name for name in result.params.index if name.startswith("C(group)")]
+    if not treat_label:
+        raise RuntimeError("mixed_effects: failed to identify group coefficient")
+    coef_name = treat_label[0]
+    beta = float(result.params[coef_name])
+    se = float(result.bse[coef_name])
+    z = beta / se if se > 0 else float("nan")
+    p = float(result.pvalues[coef_name])
+
+    # Cohen's d через pooled SD сырых значений (приближение)
+    a_vals = df.loc[df["group"] == levels[0], "value"].to_numpy()
+    b_vals = df.loc[df["group"] == levels[1], "value"].to_numpy()
+    d = cohens_d(b_vals, a_vals)  # b vs a в порядке "T - reference"
+
+    decision = _decision(p, alpha, d, d_threshold)
+    return TestResult(
+        test_name="mixed_effects_lmm",
+        statistic=float(z) if not math.isnan(z) else 0.0,
+        p_value=p,
+        n=(len(a_vals), len(b_vals)),
+        effect_size=d,
+        effect_size_name="cohens_d",
+        alpha=alpha,
+        decision=decision,
+        extra={
+            "fixed_effect_coef": beta,
+            "fixed_effect_se": se,
+            "reference_group": levels[0],
+            "treatment_group": levels[1],
+            "n_clusters": int(df["cluster"].nunique()),
+            "random_intercept_var": float(result.cov_re.iloc[0, 0])
+                if hasattr(result, "cov_re") and result.cov_re is not None else None,
+            "converged": bool(result.converged) if hasattr(result, "converged") else None,
+            "d_threshold": d_threshold,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Assumption checking (предпосылки параметрических тестов)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AssumptionReport:
+    """Результат проверки предпосылок параметрического теста."""
+    normality_per_group: list[dict]   # [{group_idx, statistic, p_value, normal_at_05}]
+    homogeneity: dict | None          # {test, statistic, p_value, equal_variances_at_05}
+    n_per_group: list[int]
+    assumptions_met: bool             # True если ВСЕ предпосылки выполнены при α=0.05
+    recommendation: str               # текстовая рекомендация по выбору теста
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def check_test_assumptions(*groups: Sequence[float],
+                            normality_alpha: float = 0.05,
+                            homogeneity_alpha: float = 0.05) -> AssumptionReport:
+    """
+    Проверяет предпосылки параметрических тестов:
+      - Шапиро–Уилк на нормальность каждой группы
+      - Левена на гомогенность дисперсий
+
+    Если выборка одна — проверяется только нормальность.
+    Возвращает AssumptionReport с рекомендацией.
+    """
+    arrays = [np.asarray(g, dtype=float) for g in groups]
+    if not arrays:
+        raise ValueError("at least one group required")
+
+    normality_per_group = []
+    all_normal = True
+    for i, arr in enumerate(arrays):
+        if len(arr) < 3:
+            normality_per_group.append({
+                "group_idx": i, "statistic": None, "p_value": None,
+                "normal_at_05": None, "reason": "n<3 (skipped)",
+            })
+            continue
+        try:
+            stat, p = stats.shapiro(arr)
+            normal = bool(p >= normality_alpha)
+        except Exception as e:
+            normality_per_group.append({
+                "group_idx": i, "statistic": None, "p_value": None,
+                "normal_at_05": None, "reason": f"shapiro_failed: {e}",
+            })
+            all_normal = False
+            continue
+        normality_per_group.append({
+            "group_idx": i,
+            "statistic": float(stat),
+            "p_value": float(p),
+            "normal_at_05": normal,
+        })
+        if not normal:
+            all_normal = False
+
+    homogeneity = None
+    equal_var = True
+    if len(arrays) >= 2 and all(len(a) >= 2 for a in arrays):
+        try:
+            lev_stat, lev_p = stats.levene(*arrays, center="median")
+            equal_var = bool(lev_p >= homogeneity_alpha)
+            homogeneity = {
+                "test": "levene_brown_forsythe",
+                "statistic": float(lev_stat),
+                "p_value": float(lev_p),
+                "equal_variances_at_05": equal_var,
+            }
+        except Exception as e:
+            homogeneity = {"test": "levene_brown_forsythe", "error": str(e),
+                           "equal_variances_at_05": None}
+            equal_var = True  # не блокируем при ошибке
+
+    assumptions_met = all_normal and equal_var
+
+    # Рекомендация
+    if assumptions_met:
+        rec = "All assumptions met — parametric tests (t-test, ANOVA) are appropriate."
+    elif all_normal and not equal_var:
+        rec = ("Normality OK but variances differ — use Welch t-test (already non-pooled) "
+               "or set ANOVA welch correction.")
+    elif not all_normal and len(arrays) == 2:
+        rec = ("Normality violated — switch to Mann-Whitney U (non-parametric) "
+               "or rely on robustness of t-test for n>30.")
+    elif not all_normal and len(arrays) > 2:
+        rec = ("Normality violated for ≥1 group — consider Kruskal-Wallis "
+               "instead of ANOVA, or rely on robustness for n>30 per group.")
+    else:
+        rec = "Mixed violations — use non-parametric test."
+
+    return AssumptionReport(
+        normality_per_group=normality_per_group,
+        homogeneity=homogeneity,
+        n_per_group=[len(a) for a in arrays],
+        assumptions_met=assumptions_met,
+        recommendation=rec,
+    )
+
+
+def auto_choose_test_two_samples(a: Sequence[float], b: Sequence[float],
+                                   alternative: Alternative = "two-sided",
+                                   alpha: float = 0.05,
+                                   d_threshold: float = 0.5) -> TestResult:
+    """
+    Выбирает между Welch t-test и Mann-Whitney на основе предпосылок.
+    Welch — если нормальность OK (даже при разных дисперсиях, она handle Welch).
+    Mann-Whitney — если нормальность нарушена.
+    """
+    report = check_test_assumptions(a, b)
+    all_normal = all(
+        ng.get("normal_at_05") is True for ng in report.normality_per_group
+    )
+    if all_normal:
+        result = welch_t_test(a, b, alternative=alternative, alpha=alpha,
+                               d_threshold=d_threshold)
+        result.extra["auto_chosen"] = "welch_t_test"
+    else:
+        result = mann_whitney_u(a, b, alternative=alternative, alpha=alpha)
+        result.extra["auto_chosen"] = "mann_whitney_u"
+        result.extra["normality_violated"] = True
+    result.extra["assumption_report"] = report.to_dict()
+    return result
+
+
 def holm_bonferroni(p_values: Iterable[float],
                     alpha: float = 0.05) -> list[dict]:
     """
