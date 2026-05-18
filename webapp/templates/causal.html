@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Каузальные интервенции — Agent Dialogue Sim</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Outfit', system-ui, sans-serif; background:#0f1115; color:#e5e7eb; margin:0; padding:0; }
+        .nav { background:#1a1d24; padding:12px 24px; display:flex; gap:16px; align-items:center; border-bottom:1px solid #2a2f3a; }
+        .nav a { color:#9ca3af; text-decoration:none; padding:6px 12px; border-radius:6px; }
+        .nav a.active { background:#2a2f3a; color:#fff; }
+        .container { max-width:1400px; margin:0 auto; padding:24px; }
+        h1 { margin:0 0 8px; font-weight:600; }
+        h2 { margin-top:32px; border-bottom:1px solid #2a2f3a; padding-bottom:8px; }
+        h3 { color:#a5b4fc; margin-top:24px; }
+        .card { background:#1a1d24; border:1px solid #2a2f3a; border-radius:10px; padding:20px; margin-bottom:16px; }
+        .grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+        .grid-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; }
+        table { width:100%; border-collapse:collapse; margin:12px 0; font-size:14px; }
+        th, td { padding:8px 10px; text-align:left; border-bottom:1px solid #2a2f3a; }
+        th { background:#22262f; font-weight:600; color:#a5b4fc; }
+        tr:hover td { background:#22262f; }
+        .num { text-align:right; font-family:'JetBrains Mono',monospace; }
+        .significant { background:rgba(34,197,94,0.15); }
+        .significant td { color:#86efac; font-weight:500; }
+        .not-significant { color:#94a3b8; }
+        .badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:12px; font-weight:500; }
+        .badge-rej { background:#16a34a; color:#fff; }
+        .badge-keep { background:#475569; color:#e5e7eb; }
+        .badge-warn { background:#f59e0b; color:#000; }
+        button, .btn { background:#4f46e5; color:#fff; border:none; padding:8px 16px; border-radius:6px; cursor:pointer; font-family:inherit; font-size:14px; }
+        button:hover, .btn:hover { background:#6366f1; }
+        button.secondary { background:#374151; }
+        button.secondary:hover { background:#4b5563; }
+        button:disabled { opacity:0.5; cursor:not-allowed; }
+        input, select { background:#22262f; color:#e5e7eb; border:1px solid #2a2f3a; padding:8px 10px; border-radius:6px; font-family:inherit; }
+        label { display:block; font-size:12px; color:#9ca3af; margin-bottom:4px; }
+        .form-row { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-bottom:12px; }
+        .exp-list { display:flex; flex-direction:column; gap:8px; }
+        .exp-item { background:#22262f; padding:12px 16px; border-radius:8px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; border:1px solid transparent; }
+        .exp-item:hover { border-color:#4f46e5; }
+        .exp-item.selected { border-color:#4f46e5; background:#1e1b4b; }
+        .exp-meta { color:#9ca3af; font-size:12px; }
+        .pair-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(80px,1fr)); gap:8px; }
+        .pair-btn { background:#22262f; padding:10px; border-radius:6px; cursor:pointer; text-align:center; font-family:'JetBrains Mono',monospace; }
+        .pair-btn:hover { background:#374151; }
+        .pair-btn.selected { background:#4f46e5; }
+        .dialogue-side { background:#0a0d12; padding:12px; border-radius:8px; max-height:600px; overflow-y:auto; }
+        .turn { margin-bottom:10px; padding:8px 10px; background:#1a1d24; border-radius:6px; border-left:3px solid #475569; }
+        .turn.positive { border-left-color:#22c55e; }
+        .turn.negative { border-left-color:#ef4444; }
+        .turn.neutral { border-left-color:#475569; }
+        .turn-meta { font-size:11px; color:#9ca3af; margin-bottom:4px; font-family:'JetBrains Mono',monospace; }
+        .turn-text { font-size:13px; line-height:1.5; }
+        .speaker { color:#a5b4fc; font-weight:500; }
+        .markdown-view { background:#0a0d12; padding:16px; border-radius:8px; max-height:700px; overflow-y:auto; }
+        .markdown-view pre { white-space:pre-wrap; word-break:break-word; font-family:'JetBrains Mono',monospace; font-size:13px; line-height:1.5; color:#e5e7eb; }
+        .status { font-size:13px; color:#9ca3af; }
+        .status.running { color:#f59e0b; }
+        .status.done { color:#22c55e; }
+        .status.error { color:#ef4444; }
+        .hide { display:none !important; }
+        .hint { color:#6b7280; font-size:12px; margin-top:4px; }
+        .ci { color:#94a3b8; font-family:'JetBrains Mono',monospace; }
+    </style>
+</head>
+<body>
+    <div class="nav">
+        <strong style="color:#a5b4fc;">Agent Dialogue Sim</strong>
+        <a href="/">Диалог</a>
+        <a href="/causal" class="active">Каузальные интервенции</a>
+    </div>
+
+    <div class="container">
+        <h1>Каузальные интервенции</h1>
+        <p class="hint">
+            Проверка гипотез о причинно-следственных связях между чертами OCEAN агентов и групповой динамикой
+            через paired counterfactual дизайн (Pearl, 2009).
+        </p>
+
+        <!-- ========= Запуск нового эксперимента ========= -->
+        <div class="card">
+            <h3 style="margin-top:0;">Запустить новый эксперимент</h3>
+            <div class="form-row">
+                <div>
+                    <label>Целевой агент</label>
+                    <select id="targetAgent">
+                        <option value="Critic">Critic</option>
+                        <option value="Explorer">Explorer</option>
+                        <option value="Facilitator">Facilitator</option>
+                    </select>
+                </div>
+                <div>
+                    <label>Черта OCEAN</label>
+                    <select id="trait">
+                        <option value="agreeableness">Agreeableness</option>
+                        <option value="openness">Openness</option>
+                        <option value="conscientiousness">Conscientiousness</option>
+                        <option value="extraversion">Extraversion</option>
+                        <option value="neuroticism">Neuroticism</option>
+                    </select>
+                </div>
+                <div>
+                    <label>Окружение</label>
+                    <select id="envIndex">
+                        <option value="0">University coursework (default)</option>
+                        <option value="1">Research seminar</option>
+                        <option value="2">Startup MVP</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-row">
+                <div>
+                    <label>Treatment value (0…1)</label>
+                    <input type="number" id="treatmentValue" min="0" max="1" step="0.1" value="0.9">
+                </div>
+                <div>
+                    <label>Control value (0…1)</label>
+                    <input type="number" id="controlValue" min="0" max="1" step="0.1" value="0.1">
+                </div>
+                <div>
+                    <label>Число пар N (1…24)</label>
+                    <input type="number" id="nPairs" min="1" max="24" step="1" value="4">
+                </div>
+            </div>
+            <div class="form-row">
+                <div>
+                    <label>Ходов на диалог (2…20)</label>
+                    <input type="number" id="nTurns" min="2" max="20" step="1" value="8">
+                </div>
+                <div>
+                    <label>Параллелизм (1…6)</label>
+                    <input type="number" id="parallelism" min="1" max="6" step="1" value="3">
+                </div>
+                <div style="display:flex; align-items:end;">
+                    <button id="runBtn" style="width:100%;">Запустить эксперимент</button>
+                </div>
+            </div>
+            <div id="jobStatus" class="status"></div>
+            <p class="hint">
+                Примерное время прогона: N=4, n_turns=8 → ~60 с. N=8, n_turns=10 → ~120 с.
+                Каждая пара = 2 диалога (treatment + control) с одинаковым seed.
+            </p>
+        </div>
+
+        <!-- ========= Список существующих экспериментов ========= -->
+        <div class="card">
+            <h3 style="margin-top:0;">Существующие эксперименты <button class="secondary" id="refreshBtn" style="float:right;">Обновить</button></h3>
+            <div id="expList" class="exp-list">Загрузка…</div>
+        </div>
+
+        <!-- ========= Детали выбранного эксперимента ========= -->
+        <div id="details" class="hide">
+            <h2>Результаты эксперимента <span id="detailTitle" style="color:#a5b4fc;"></span></h2>
+
+            <div class="card">
+                <h3 style="margin-top:0;">Интервенция</h3>
+                <p>
+                    <strong>Treatment:</strong> <code id="detailTreat"></code><br>
+                    <strong>Control:</strong> <code id="detailCtrl"></code><br>
+                    <strong>N пар:</strong> <span id="detailN"></span> &nbsp;|&nbsp;
+                    <strong>Длительность:</strong> <span id="detailDur"></span>с
+                </p>
+            </div>
+
+            <div class="card">
+                <h3 style="margin-top:0;">Average Treatment Effects (paired t-test)</h3>
+                <table id="ateTable">
+                    <thead>
+                        <tr>
+                            <th>Метрика</th>
+                            <th class="num">mean(T)</th>
+                            <th class="num">mean(C)</th>
+                            <th class="num">ATE</th>
+                            <th>95% CI</th>
+                            <th class="num">t</th>
+                            <th class="num">p</th>
+                            <th class="num">d_z</th>
+                            <th>H₀</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+                <p class="hint">H₀ отвергается при p &lt; 0.05 И |d_z| ≥ 0.3 (raw, без поправки на множественные сравнения).</p>
+            </div>
+
+            <div class="card">
+                <h3 style="margin-top:0;">Гипотезы и заключение</h3>
+                <div id="hypothesisVerdict"></div>
+            </div>
+
+            <div class="card">
+                <h3 style="margin-top:0;">Per-pair Individual Treatment Effects (нажмите на seed для просмотра пары)</h3>
+                <div id="pairGrid" class="pair-grid"></div>
+            </div>
+
+            <div id="pairView" class="hide card">
+                <h3 style="margin-top:0;">Пара seed=<span id="pairSeed"></span></h3>
+                <div class="grid-2">
+                    <div>
+                        <h4 style="color:#22c55e; margin:0 0 8px;">Treatment <span id="treatDesc" style="font-weight:normal; font-size:12px; color:#9ca3af;"></span></h4>
+                        <div id="treatHistory" class="dialogue-side"></div>
+                    </div>
+                    <div>
+                        <h4 style="color:#ef4444; margin:0 0 8px;">Control <span id="ctrlDesc" style="font-weight:normal; font-size:12px; color:#9ca3af;"></span></h4>
+                        <div id="ctrlHistory" class="dialogue-side"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3 style="margin-top:0;">Научный отчёт</h3>
+                <div style="margin-bottom:12px;">
+                    <button class="secondary" id="showReportBtn">Краткий отчёт (REPORT.md)</button>
+                    <button class="secondary" id="showNauchnyiBtn">Развёрнутый отчёт (НАУЧНЫЙ_ОТЧЁТ.md)</button>
+                </div>
+                <div id="reportView" class="markdown-view hide"><pre id="reportPre"></pre></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    const $ = id => document.getElementById(id);
+    let currentExp = null;
+    let currentSummary = null;
+    let pollTimer = null;
+
+    function fmt(x, d=3) {
+        if (x === null || x === undefined || (typeof x === 'number' && (isNaN(x) || !isFinite(x)))) return 'n/a';
+        return Number(x).toFixed(d);
+    }
+    function fmtP(p) {
+        if (p === null || p === undefined || isNaN(p)) return 'n/a';
+        if (p < 0.001) return '< 0.001';
+        return p.toFixed(3);
+    }
+    function fmtTime(secs) {
+        if (!secs) return '?';
+        return Number(secs).toFixed(1);
+    }
+
+    // Русские названия метрик и привязка к теориям
+    const METRIC_LABELS = {
+        avg_tone: { ru: 'Средний тон', theory: 'Barsade (эмоциональное заражение)' },
+        avg_reply_length: { ru: 'Длина реплики (слов)', theory: 'Big Five / LIWC engagement' },
+        actionability_rate: { ru: 'Доля конкретных шагов', theory: 'Wheelan (Performing)' },
+        reciprocity: { ru: 'Взаимность связей', theory: 'Borgatti (SNA)' },
+        emotion_entropy: { ru: 'Разнообразие эмоций', theory: 'Cowen-Keltner (эмоц. пространство)' },
+        question_rate: { ru: 'Доля вопросов', theory: 'ISO 24617-2 (info-seeking acts)' },
+        negative_tone_rate: { ru: 'Доля негативных реплик', theory: 'Barsade / Wheelan (Storming)' },
+        positive_tone_rate: { ru: 'Доля позитивных реплик', theory: 'Barsade' },
+        targeting_rate: { ru: 'Адресность', theory: 'Borgatti (SNA)' },
+        reference_rate: { ru: 'Упоминания участников', theory: 'LSM (Tausczik-Pennebaker)' },
+    };
+    function metricRu(m) { return (METRIC_LABELS[m] && METRIC_LABELS[m].ru) || m; }
+    function metricTheory(m) { return (METRIC_LABELS[m] && METRIC_LABELS[m].theory) || ''; }
+
+    async function refreshList() {
+        const r = await fetch('/api/causal/list');
+        const j = await r.json();
+        const items = j.experiments || [];
+        const el = $('expList');
+        if (!items.length) {
+            el.innerHTML = '<div class="hint">Пока нет ни одного эксперимента. Запустите первый выше ↑</div>';
+            return;
+        }
+        el.innerHTML = '';
+        for (const it of items) {
+            const div = document.createElement('div');
+            div.className = 'exp-item';
+            div.dataset.dir = it.dir;
+            div.innerHTML = `
+                <div>
+                    <div><strong>${it.experiment_id || it.dir}</strong></div>
+                    <div class="exp-meta">${it.treatment_descriptor || ''} vs ${it.control_descriptor || ''}</div>
+                    <div class="exp-meta">N=${it.n_pairs_valid || 0}/${it.n_pairs_total || 0} пар · ${fmtTime(it.duration_seconds)}с · ${(it.timestamp || '').slice(0,19).replace('T',' ')}</div>
+                </div>
+                <button class="secondary">Открыть →</button>
+            `;
+            div.onclick = () => loadExperiment(it.dir);
+            el.appendChild(div);
+        }
+    }
+
+    async function loadExperiment(expDir) {
+        currentExp = expDir;
+        document.querySelectorAll('.exp-item').forEach(e => e.classList.toggle('selected', e.dataset.dir === expDir));
+        const r = await fetch('/api/causal/experiment/' + encodeURIComponent(expDir));
+        const j = await r.json();
+        if (!j.ok) { alert(j.error); return; }
+        currentSummary = j;
+        renderDetails(j);
+        $('details').classList.remove('hide');
+        $('details').scrollIntoView({behavior:'smooth'});
+    }
+
+    function renderDetails(j) {
+        const s = j.summary;
+        $('detailTitle').textContent = s.experiment_id;
+        $('detailTreat').textContent = s.intervention_treatment.descriptor;
+        $('detailCtrl').textContent = s.intervention_control.descriptor;
+        $('detailN').textContent = `${s.n_pairs_valid}/${s.n_pairs_total}`;
+        $('detailDur').textContent = fmtTime(s.duration_seconds);
+
+        // ATE table
+        const tbody = $('ateTable').querySelector('tbody');
+        tbody.innerHTML = '';
+        let rejected = [];
+        let inExpectedDirection = 0, totalDirectional = 0;
+        const expectedSigns = {
+            avg_tone:+1, avg_reply_length:+1, actionability_rate:+1, reciprocity:+1,
+            emotion_entropy:-1, question_rate:0,
+        };
+        for (const [metric, a] of Object.entries(s.ate_by_metric)) {
+            const row = document.createElement('tr');
+            const isRej = a.decision === 'reject_H0';
+            row.className = isRej ? 'significant' : 'not-significant';
+            row.innerHTML = `
+                <td>
+                    <div style="font-weight:500;">${metricRu(metric)}</div>
+                    <div style="font-size:11px;color:#9ca3af;font-family:'JetBrains Mono',monospace;">${metric}</div>
+                    <div style="font-size:11px;color:#6b7280;font-style:italic;">${metricTheory(metric)}</div>
+                </td>
+                <td class="num">${fmt(a.mean_treatment,3)}</td>
+                <td class="num">${fmt(a.mean_control,3)}</td>
+                <td class="num"><strong>${a.ate>0?'+':''}${fmt(a.ate,3)}</strong></td>
+                <td class="ci">[${fmt(a.ci_low,2)}, ${fmt(a.ci_high,2)}]</td>
+                <td class="num">${fmt(a.t,2)}</td>
+                <td class="num">${fmtP(a.p_value)}</td>
+                <td class="num">${fmt(a.cohens_d_z,2)}</td>
+                <td>${isRej ? '<span class="badge badge-rej">отвергнута</span>' : '<span class="badge badge-keep">не отвергнута</span>'}</td>
+            `;
+            tbody.appendChild(row);
+            if (isRej) rejected.push(metric);
+            const exp = expectedSigns[metric];
+            if (exp !== undefined && exp !== 0 && a.ate !== null) {
+                totalDirectional++;
+                if ((a.ate > 0 && exp > 0) || (a.ate < 0 && exp < 0)) inExpectedDirection++;
+            }
+        }
+
+        // Hypotheses verdict
+        const verdict = $('hypothesisVerdict');
+        let html = '';
+        if (rejected.length) {
+            html += `<p>✅ <strong>${rejected.length} гипотез отвергнута (raw p<0.05, |d_z|≥0.3):</strong></p><ul>`;
+            for (const m of rejected) {
+                const a = s.ate_by_metric[m];
+                const sign = a.ate > 0 ? 'увеличивает' : 'уменьшает';
+                html += `<li><strong>${metricRu(m)}</strong> (<code>${m}</code>): интервенция <strong>${sign}</strong> метрику; ATE=${fmt(a.ate,3)}, p=${fmtP(a.p_value)}, d_z=${fmt(a.cohens_d_z,2)}<br><span style="color:#9ca3af;font-size:12px;">↳ ${metricTheory(m)}</span></li>`;
+            }
+            html += '</ul>';
+        } else {
+            html += `<p>⏸ Ни одна гипотеза не отвергнута на уровне отдельных метрик (вероятно, недостаточная мощность: N=${s.n_pairs_valid}).</p>`;
+        }
+        // Sign-test
+        if (totalDirectional >= 3) {
+            const binomP = binomSurvival(inExpectedDirection, totalDirectional, 0.5);
+            const passed = binomP < 0.05;
+            html += `<p><strong>Омнибусный sign-test на направление эффектов:</strong> ${inExpectedDirection}/${totalDirectional} совпадений с теоретическими прогнозами, p = ${binomP.toFixed(4)} `;
+            html += passed ? '<span class="badge badge-rej">паттерн значим</span>' : '<span class="badge badge-keep">недостаточно</span>';
+            html += '</p>';
+            if (passed) {
+                html += `<p class="hint">Это устойчивый к множественным сравнениям результат: вероятность получить ${inExpectedDirection}/${totalDirectional} совпадений с теорией случайно = ${binomP.toFixed(4)}.</p>`;
+            }
+        }
+        verdict.innerHTML = html;
+
+        // Pair grid
+        const pg = $('pairGrid');
+        pg.innerHTML = '';
+        for (const p of (j.pairs || [])) {
+            const b = document.createElement('div');
+            b.className = 'pair-btn';
+            b.textContent = p.seed;
+            b.title = 'ITE: ' + Object.entries(p.ite || {}).map(([k,v]) => `${k}=${fmt(v,2)}`).join(', ');
+            b.onclick = () => loadPair(p.seed);
+            pg.appendChild(b);
+        }
+        $('pairView').classList.add('hide');
+
+        // Reports
+        if (j.report_md) window._reportMd = j.report_md;
+        if (j.nauchnyi_md) window._nauchnyiMd = j.nauchnyi_md;
+        $('reportView').classList.add('hide');
+    }
+
+    // Биномиальная выживаемость P(X >= k | n, p) — для sign-test (one-sided)
+    function binomSurvival(k, n, p) {
+        let sum = 0;
+        for (let i = k; i <= n; i++) sum += binomCoef(n, i) * Math.pow(p, i) * Math.pow(1-p, n-i);
+        return sum;
+    }
+    function binomCoef(n, k) {
+        if (k < 0 || k > n) return 0;
+        if (k === 0 || k === n) return 1;
+        let c = 1;
+        for (let i = 0; i < k; i++) c = c * (n - i) / (i + 1);
+        return c;
+    }
+
+    async function loadPair(seed) {
+        if (!currentExp) return;
+        document.querySelectorAll('.pair-btn').forEach(b => b.classList.toggle('selected', b.textContent == seed));
+        const r = await fetch(`/api/causal/pair/${encodeURIComponent(currentExp)}/${seed}`);
+        const j = await r.json();
+        if (!j.ok) { alert(j.error); return; }
+        $('pairSeed').textContent = seed;
+        $('treatDesc').textContent = currentSummary.summary.intervention_treatment.descriptor;
+        $('ctrlDesc').textContent = currentSummary.summary.intervention_control.descriptor;
+        $('treatHistory').innerHTML = renderHistory(j.treatment_history);
+        $('ctrlHistory').innerHTML = renderHistory(j.control_history);
+        $('pairView').classList.remove('hide');
+        $('pairView').scrollIntoView({behavior:'smooth', block:'nearest'});
+    }
+
+    function renderHistory(history) {
+        if (!history || !history.length) return '<div class="hint">Пусто</div>';
+        return history.map(h => `
+            <div class="turn ${h.tone || 'neutral'}">
+                <div class="turn-meta">[${h.turn}] <span class="speaker">${h.speaker}</span> → ${h.target || 'all'} · ${h.tone || ''}/${h.emotion || ''}</div>
+                <div class="turn-text">${escapeHtml(h.reply || '')}</div>
+            </div>
+        `).join('');
+    }
+    function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+    $('showReportBtn').onclick = () => {
+        if (window._reportMd) { $('reportPre').textContent = window._reportMd; $('reportView').classList.remove('hide'); }
+        else alert('REPORT.md не найден');
+    };
+    $('showNauchnyiBtn').onclick = () => {
+        if (window._nauchnyiMd) { $('reportPre').textContent = window._nauchnyiMd; $('reportView').classList.remove('hide'); }
+        else alert('НАУЧНЫЙ_ОТЧЁТ.md не найден');
+    };
+    $('refreshBtn').onclick = refreshList;
+
+    // Запуск нового эксперимента
+    $('runBtn').onclick = async () => {
+        const params = {
+            target_agent: $('targetAgent').value,
+            trait: $('trait').value,
+            treatment_value: parseFloat($('treatmentValue').value),
+            control_value: parseFloat($('controlValue').value),
+            n_pairs: parseInt($('nPairs').value),
+            n_turns: parseInt($('nTurns').value),
+            parallelism: parseInt($('parallelism').value),
+            env_context_index: parseInt($('envIndex').value),
+        };
+        $('runBtn').disabled = true;
+        $('jobStatus').textContent = 'Отправка…';
+        $('jobStatus').className = 'status running';
+        try {
+            const r = await fetch('/api/causal/run', {
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body: JSON.stringify(params),
+            });
+            const j = await r.json();
+            if (!j.ok) {
+                $('jobStatus').textContent = 'Ошибка: ' + j.error;
+                $('jobStatus').className = 'status error';
+                $('runBtn').disabled = false;
+                return;
+            }
+            pollJob(j.job_id);
+        } catch (e) {
+            $('jobStatus').textContent = 'Сеть: ' + e.message;
+            $('jobStatus').className = 'status error';
+            $('runBtn').disabled = false;
+        }
+    };
+
+    async function pollJob(jobId) {
+        if (pollTimer) clearInterval(pollTimer);
+        const start = Date.now();
+        pollTimer = setInterval(async () => {
+            try {
+                const r = await fetch('/api/causal/job/' + jobId);
+                const j = await r.json();
+                if (!j.ok) return;
+                const job = j.job;
+                const secs = ((Date.now() - start) / 1000).toFixed(0);
+                if (job.status === 'queued' || job.status === 'running') {
+                    $('jobStatus').textContent = `[${job.status}] ${secs}с прошло…`;
+                    $('jobStatus').className = 'status running';
+                } else if (job.status === 'done') {
+                    $('jobStatus').textContent = `✓ Готово за ${fmtTime(job.duration)}с. Открываю…`;
+                    $('jobStatus').className = 'status done';
+                    clearInterval(pollTimer);
+                    $('runBtn').disabled = false;
+                    await refreshList();
+                    if (job.result_dir) loadExperiment(job.result_dir);
+                } else if (job.status === 'error') {
+                    $('jobStatus').textContent = '✗ Ошибка: ' + job.error;
+                    $('jobStatus').className = 'status error';
+                    clearInterval(pollTimer);
+                    $('runBtn').disabled = false;
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }, 2000);
+    }
+
+    refreshList();
+    </script>
+</body>
+</html>

@@ -37,6 +37,7 @@ class DialogueManager:
     edges_window: List[Dict[str, Any]] = field(default_factory=list)  # для визуализаций последнего окна
     enable_validation: bool = True  # Toggle validation on/off
     enable_cot: bool = False  # Inject Chain-of-Thought instruction into system prompt (for H6 experiments)
+    language: str = "ru"  # 'ru' or 'en' — язык реплик агентов; влияет на системный промпт.
     strict_mode: bool = False  # If True, raise RuntimeError on API or persistent validation failure
                                 # instead of silently substituting fallback replies. Used in scientific
                                 # experiments where contaminated data destroys statistical inference.
@@ -86,6 +87,20 @@ class DialogueManager:
             f"\n\nCURRENT PHASE [{phase['name'].upper()}]: {phase['instruction']}\n"
             "Shift the conversation forward accordingly."
         )
+
+    def _language_block(self) -> str:
+        """Языковая директива. Применяется в build_messages() и model_turn() fallback'ах."""
+        lang = (self.language or "ru").lower()
+        if lang == "ru":
+            return (
+                "\n\nЯЗЫК ОТВЕТА (ОБЯЗАТЕЛЬНО):\n"
+                "Все твои реплики ДОЛЖНЫ быть на РУССКОМ языке (кириллица). "
+                "Это абсолютное требование, даже если предыдущая часть диалога была на английском. "
+                "Поле 'reply' — на русском, разговорным русским с естественными интонациями. "
+                "Поле 'emotion' — короткое английское слово (curious, thoughtful, supportive…). "
+                "Имена участников оставляй как есть.\n"
+            )
+        return ""
 
     def _cot_block(self) -> str:
         """Chain-of-Thought instruction (Wei et al. 2022). Inserted only when enable_cot=True.
@@ -388,6 +403,7 @@ class DialogueManager:
         phase_block = self._phase_block()
         context_style_block = self._context_style_block()
         cot_block = self._cot_block()
+        language_block = self._language_block()
         mood_block = self._mood_guidance(agent.name)
         # Инструкция про живых пользователей
         human_block = ""
@@ -418,6 +434,7 @@ class DialogueManager:
             + phase_block
             + context_style_block
             + cot_block
+            + language_block
             + mood_block
             + ("\nYou haven't talked much to: " + ", ".join(target_order[:2]) + "\n" if target_order else "")
             + (
@@ -579,7 +596,8 @@ class DialogueManager:
                 f"\n\nEnvironment: {self.env_context}\n\n" +
                 "You must respond with a valid JSON object containing: reply (your message), tone (positive/neutral/negative), emotion (one word), and target (who you're addressing).\n" +
                 f"Available targets: {', '.join(allowed_targets) if allowed_targets else 'none'}\n" +
-                "Keep your reply natural, human-like, and short (1-2 sentences)."
+                "Keep your reply natural, human-like, and short (1-2 sentences)." +
+                self._language_block()
             },
             {"role": "user", "content":
                 "Recent conversation:\n" +
@@ -649,6 +667,7 @@ class DialogueManager:
                     "- Use natural speech patterns and contractions\n"
                     "- Keep the wording natural but not random or sloppy\n"
                     + "- Sound spontaneous, not scripted"
+                    + self._language_block()
                 },
                 {"role": "user", "content":
                     f"What's been said in this real conversation:\n{recent_context}\n\n" +
@@ -819,7 +838,7 @@ class DialogueManager:
         if self.enable_validation and self.validation_pipeline:
             turn_data = {"speaker": speaker_name, "target": target, "reply": reply, "tone": tone, "emotion": emotion}
             allowed_targets = [a.name for a in self.agents if a.name != speaker_name]
-            context = {"history": self.history, "allowed_targets": allowed_targets, "env_context": self.env_context}
+            context = {"history": self.history, "allowed_targets": allowed_targets, "env_context": self.env_context, "language": self.language}
             is_valid, validation_results = self.validation_pipeline.validate_turn(turn_data, context)
             record["validation_issues"] = len(validation_results) if validation_results else 0
 
@@ -887,7 +906,7 @@ class DialogueManager:
             validation_results = []
             is_valid = True
             if self.enable_validation and self.validation_pipeline:
-                context = {"history": self.history, "allowed_targets": allowed_targets, "env_context": self.env_context}
+                context = {"history": self.history, "allowed_targets": allowed_targets, "env_context": self.env_context, "language": self.language}
                 is_valid, validation_results = self.validation_pipeline.validate_turn(turn_data, context)
                 if validation_results:
                     formatted = self.validation_pipeline.format_results(validation_results)
@@ -999,6 +1018,7 @@ class DialogueManager:
                 "history": self.history,
                 "allowed_targets": allowed_targets,
                 "env_context": self.env_context,
+            "language": self.language,
             }
             is_valid, validation_results = self.validation_pipeline.validate_turn(turn_data, context)
 
@@ -1092,7 +1112,7 @@ class DialogueManager:
         if self.enable_validation and self.validation_pipeline:
             turn_data = {"speaker": "User", "target": target, "reply": reply, "tone": tone, "emotion": emotion}
             allowed_targets = [a.name for a in self.agents if a.name != "User"]
-            context = {"history": self.history, "allowed_targets": allowed_targets, "env_context": self.env_context}
+            context = {"history": self.history, "allowed_targets": allowed_targets, "env_context": self.env_context, "language": self.language}
             is_valid, validation_results = self.validation_pipeline.validate_turn(turn_data, context)
             record["validation_issues"] = len(validation_results) if validation_results else 0
 

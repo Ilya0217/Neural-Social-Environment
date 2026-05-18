@@ -1,61 +1,92 @@
-# agent_dialogue_sim/visualize.py
-from pathlib import Path
-from typing import List, Dict, Any, Tuple
+# agent_dialogue_sim/analytics/visualize.py
+#
+# Профессиональная научная визуализация сети взаимодействий.
+# 4-панельный публикационного качества дашборд:
+#   (A) Главный граф    — force-directed сеть с глубиной, центральностями
+#   (B) Centralities    — bar chart по агентам (in / out / betweenness)
+#   (C) Sociomatrix     — heatmap взаимодействий с tone-coloring
+#   (D) Turn timeline   — лента ходов с цветовой кодировкой тона
+#
+# Научные ссылки (рендерятся в подписи):
+#   — Borgatti et al. (2009) Social Network Analysis
+#   — Moreno (1934); Wasserman & Faust (1994) Sociomatrix
+#   — Sacks, Schegloff & Jefferson (1974) Turn-taking organization
+#   — Newman (2010) Networks: an introduction
+from __future__ import annotations
+
 import math
+from pathlib import Path
+from typing import Any, Dict, List, Tuple
+
 import matplotlib
-matplotlib.use("Agg")  # Non-interactive backend for thread safety
-import networkx as nx
+matplotlib.use("Agg")  # Non-interactive backend (thread-safe for Flask)
 import matplotlib.pyplot as plt
+import networkx as nx
 from matplotlib import colors as mcolors
-from matplotlib.lines import Line2D
-from matplotlib.patches import Patch
 from matplotlib import gridspec
+from matplotlib import patheffects as path_effects
+from matplotlib.lines import Line2D
+from matplotlib.patches import Circle, FancyArrowPatch, Patch, Rectangle
 
-# Palettes and color helpers
+# === Палитра тонов ===
 TONE_SCORE = {"positive": 1.0, "neutral": 0.0, "negative": -1.0}
+C_POS = "#10b981"  # emerald 500
+C_NEU = "#94a3b8"  # slate 400
+C_NEG = "#ef4444"  # red 500
+C_AXIS = "#334155"  # slate 700
+C_GRID = "#e2e8f0"  # slate 200
+C_PANEL_BG = "#fafbfc"
+C_FIG_BG = "#f4f6fa"
 
-# tone colors (scale ends + neutral center)
-C_POS = "#10b981"  # зелёный
-C_NEU = "#9ca3af"  # серый
-C_NEG = "#ef4444"  # красный
-
-# emotion colors (node outline)
+# === Палитра последних эмоций (обводка узла) ===
 EMOTION_COLOR = {
-    "calm": "#60a5fa",       # голубой
-    "curious": "#a78bfa",    # фиолетовый
-    "confident": "#f59e0b",  # янтарный
-    "skeptical": "#f97316",  # оранжевый
-    "angry": "#ef4444",      # красный
-    "joyful": "#10b981",     # зелёный
-    "sad": "#3b82f6",        # синий
-    "neutral": "#6b7280",    # тёмно‑серый
+    "calm": "#60a5fa",
+    "curious": "#a78bfa",
+    "thoughtful": "#8b5cf6",
+    "confident": "#f59e0b",
+    "skeptical": "#f97316",
+    "concerned": "#f97316",
+    "angry": "#dc2626",
+    "frustrated": "#dc2626",
+    "joyful": "#10b981",
+    "excited": "#10b981",
+    "encouraging": "#22c55e",
+    "supportive": "#22c55e",
+    "sad": "#3b82f6",
+    "pragmatic": "#475569",
+    "measured": "#64748b",
+    "focused": "#0ea5e9",
+    "friendly": "#fb7185",
+    "neutral": "#94a3b8",
 }
 
-def _to_rgb(hex_color: str) -> Tuple[float, float, float]:
-    return mcolors.to_rgb(hex_color)
+# === Утилиты ===
+def _to_rgb(c: str) -> Tuple[float, float, float]:
+    return mcolors.to_rgb(c)
+
 
 def _blend(c1: str, c2: str, t: float) -> str:
-    """Linear interpolation for t ∈ [0,1] between two hex colors."""
     r1, g1, b1 = _to_rgb(c1)
     r2, g2, b2 = _to_rgb(c2)
-    r = r1 + (r2 - r1) * t
-    g = g1 + (g2 - g1) * t
-    b = b1 + (b2 - b1) * t
-    return mcolors.to_hex((r, g, b))
+    return mcolors.to_hex((r1 + (r2 - r1) * t, g1 + (g2 - g1) * t, b1 + (b2 - b1) * t))
 
-def tone_to_color(avg_score: float) -> str:
-    """
-    avg_score ∈ [-1, 1]; <0 — красный→серый, >=0 — серый→зелёный
-    """
-    if avg_score >= 0:
-        return _blend(C_NEU, C_POS, avg_score)
-    t = avg_score + 1.0  # [-1..0] -> [0..1]
-    return _blend(C_NEG, C_NEU, t)
 
-def compute_stats(agents_meta: Dict[str, Dict[str, str]], history: List[Dict[str, Any]], window: int):
-    """Compute node-level and windowed edge metrics from history."""
+def tone_to_color(s: float) -> str:
+    s = max(-1.0, min(1.0, float(s)))
+    if s >= 0:
+        return _blend(C_NEU, C_POS, s)
+    return _blend(C_NEG, C_NEU, s + 1.0)
+
+
+def _emotion_color(name: str) -> str:
+    return EMOTION_COLOR.get((name or "neutral").lower(), "#64748b")
+
+
+# === Сбор статистики ===
+def compute_stats(agents_meta: Dict[str, Dict[str, str]],
+                  history: List[Dict[str, Any]],
+                  window: int):
     agents = list(agents_meta.keys())
-    # --- Node‑level ---
     talks = {a: 0 for a in agents}
     out_deg = {a: 0 for a in agents}
     in_deg = {a: 0 for a in agents}
@@ -65,11 +96,15 @@ def compute_stats(agents_meta: Dict[str, Dict[str, str]], history: List[Dict[str
 
     for rec in history:
         sp = rec["speaker"]
-        talks[sp] = talks.get(sp, 0) + 1
+        if sp not in talks:
+            talks[sp] = out_deg[sp] = in_deg[sp] = tone_cnt[sp] = 0
+            tone_sum[sp] = 0.0
+            last_emotion[sp] = "neutral"
+        talks[sp] += 1
         last_emotion[sp] = (rec.get("emotion") or "neutral").lower()
-        sc = TONE_SCORE.get((rec.get("tone") or "neutral").lower(), 0.0)
-        tone_sum[sp] = tone_sum.get(sp, 0.0) + sc
-        tone_cnt[sp] = tone_cnt.get(sp, 0) + 1
+        tone = TONE_SCORE.get((rec.get("tone") or "neutral").lower(), 0.0)
+        tone_sum[sp] += tone
+        tone_cnt[sp] += 1
         tgt = rec.get("target")
         if tgt:
             out_deg[sp] = out_deg.get(sp, 0) + 1
@@ -77,36 +112,394 @@ def compute_stats(agents_meta: Dict[str, Dict[str, str]], history: List[Dict[str
 
     node_stats = {}
     for a in agents:
-        avg_tone = (tone_sum.get(a, 0.0) / tone_cnt[a]) if tone_cnt[a] else 0.0
+        avg_tone = tone_sum[a] / tone_cnt[a] if tone_cnt[a] else 0.0
         node_stats[a] = {
-            "talks": talks.get(a, 0),
-            "out": out_deg.get(a, 0),
-            "in": in_deg.get(a, 0),
-            "avg_tone": avg_tone,
-            "emotion": last_emotion.get(a, "neutral"),
+            "talks": talks[a], "out": out_deg[a], "in": in_deg[a],
+            "avg_tone": avg_tone, "emotion": last_emotion[a],
         }
 
-    # --- Edge‑level (last `window` messages) ---
-    last = history[-window:] if window > 0 else history[:]
-    edge_counts = {}
-    edge_tone_sum = {}
+    last = history[-window:] if window > 0 else list(history)
+    edge_counts: Dict[Tuple[str, str], int] = {}
+    edge_tone: Dict[Tuple[str, str], float] = {}
     for rec in last:
-        sp = rec["speaker"]
-        tgt = rec.get("target")
+        sp, tgt = rec["speaker"], rec.get("target")
         if not tgt:
             continue
-        key = (sp, tgt)
-        edge_counts[key] = edge_counts.get(key, 0) + 1
-        sc = TONE_SCORE.get((rec.get("tone") or "neutral").lower(), 0.0)
-        edge_tone_sum[key] = edge_tone_sum.get(key, 0.0) + sc
-
-    edge_stats = {}
-    for key, cnt in edge_counts.items():
-        s = edge_tone_sum[key] / cnt if cnt else 0.0
-        edge_stats[key] = {"count": cnt, "avg_score": s}
-
+        k = (sp, tgt)
+        edge_counts[k] = edge_counts.get(k, 0) + 1
+        edge_tone[k] = edge_tone.get(k, 0.0) + TONE_SCORE.get((rec.get("tone") or "neutral").lower(), 0.0)
+    edge_stats = {
+        k: {"count": c, "avg_score": edge_tone[k] / c}
+        for k, c in edge_counts.items()
+    }
     return node_stats, edge_stats
 
+
+# === Главная сетевая панель ===
+def _draw_main_network(ax, G, pos, agents, node_stats, edge_stats,
+                       agents_meta, history, window, betweenness,
+                       max_messages):
+    """Главная панель: force-directed network с глубиной."""
+    ax.set_facecolor(C_PANEL_BG)
+    ax.set_xlim(-1.45, 1.45)
+    ax.set_ylim(-1.45, 1.45)
+    ax.set_aspect("equal")
+    ax.axis("off")
+
+    # Лёгкий "холст" — научная сетка как полярные направляющие
+    for r in (0.5, 1.0, 1.35):
+        circ = Circle((0, 0), r, fill=False, ec=C_GRID, lw=0.6, ls="--", alpha=0.7, zorder=0)
+        ax.add_patch(circ)
+    ax.plot([-1.4, 1.4], [0, 0], color=C_GRID, lw=0.5, alpha=0.5, zorder=0)
+    ax.plot([0, 0], [-1.4, 1.4], color=C_GRID, lw=0.5, alpha=0.5, zorder=0)
+
+    # --- РЁБРА: каждое сообщение из окна = отдельная стрелка с тоновым цветом ---
+    recent = history[-window:] if window > 0 else list(history)
+    # сгруппируем индексы по парам — нужно для разнесения стрелок (arc radius)
+    arc_seen: Dict[Tuple[str, str], int] = {}
+    for rec in recent:
+        sp, tgt = rec["speaker"], rec.get("target")
+        if not tgt or sp not in pos or tgt not in pos:
+            continue
+        tone = (rec.get("tone") or "neutral").lower()
+        col = tone_to_color(TONE_SCORE.get(tone, 0.0))
+        k = (sp, tgt)
+        arc_seen[k] = arc_seen.get(k, 0) + 1
+        # параллельные стрелки разносим небольшими дугами
+        rad = 0.05 + 0.05 * ((arc_seen[k] - 1) % 5)
+        # обратная пара — заметная дуга
+        if (tgt, sp) in arc_seen and arc_seen.get((tgt, sp), 0) > 0:
+            rad += 0.12
+
+        # тень рёбер для эффекта глубины
+        shadow = FancyArrowPatch(
+            pos[sp], pos[tgt],
+            connectionstyle=f"arc3,rad={rad}",
+            arrowstyle="-|>", mutation_scale=18,
+            linewidth=4.5, color="#000000", alpha=0.06,
+            zorder=1.5, shrinkA=20, shrinkB=22,
+        )
+        ax.add_patch(shadow)
+
+        arrow = FancyArrowPatch(
+            pos[sp], pos[tgt],
+            connectionstyle=f"arc3,rad={rad}",
+            arrowstyle="-|>", mutation_scale=14,
+            linewidth=1.7, color=col, alpha=0.92,
+            zorder=2, shrinkA=18, shrinkB=20,
+        )
+        ax.add_patch(arrow)
+
+    # --- УЗЛЫ с эффектом объёма ---
+    # размер: логарифмическая шкала (научный стандарт)
+    def node_radius(talks):
+        # talks 0..max → radius 0.10..0.20
+        return 0.10 + 0.10 * (math.log1p(talks) / math.log1p(max(max_messages, 1)))
+
+    # halo от betweenness — выделяет "брокеров" (Burt 2005)
+    bmax = max(betweenness.values()) if betweenness else 0.0
+    for a in agents:
+        if a not in pos:
+            continue
+        x, y = pos[a]
+        r = node_radius(node_stats[a]["talks"])
+        if bmax > 0:
+            b = betweenness.get(a, 0.0)
+            if b > 0:
+                halo_r = r + 0.04 + 0.10 * (b / bmax)
+                halo = Circle((x, y), halo_r, color="#fbbf24", alpha=0.18, zorder=2.5)
+                ax.add_patch(halo)
+
+    # тени узлов
+    for a in agents:
+        if a not in pos:
+            continue
+        x, y = pos[a]
+        r = node_radius(node_stats[a]["talks"])
+        shadow = Circle((x + 0.015, y - 0.018), r * 1.02, color="#000000",
+                        alpha=0.18, zorder=3)
+        ax.add_patch(shadow)
+
+    # сами узлы + обводка по эмоции
+    for a in agents:
+        if a not in pos:
+            continue
+        x, y = pos[a]
+        r = node_radius(node_stats[a]["talks"])
+        col = agents_meta[a].get("color", "#6366f1")
+        emo_col = _emotion_color(node_stats[a]["emotion"])
+        # внешняя обводка эмоции
+        outer = Circle((x, y), r, color=emo_col, zorder=4)
+        ax.add_patch(outer)
+        # заливка узла
+        inner = Circle((x, y), r * 0.86, color=col, zorder=5)
+        ax.add_patch(inner)
+        # лёгкий glare сверху-слева → объём
+        glare = Circle((x - r * 0.25, y + r * 0.25), r * 0.32,
+                       color="#ffffff", alpha=0.30, zorder=6)
+        ax.add_patch(glare)
+
+    # ПОДПИСИ узлов — снаружи, без перекрытия
+    for a in agents:
+        if a not in pos:
+            continue
+        x, y = pos[a]
+        r = node_radius(node_stats[a]["talks"])
+        # позиция подписи: радиально от центра
+        theta = math.atan2(y, x) if (x != 0 or y != 0) else math.pi / 2
+        tx = x + (r + 0.08) * math.cos(theta)
+        ty = y + (r + 0.08) * math.sin(theta)
+        ha = "left" if math.cos(theta) > 0.1 else ("right" if math.cos(theta) < -0.1 else "center")
+        va = "bottom" if math.sin(theta) > 0.1 else ("top" if math.sin(theta) < -0.1 else "center")
+        ns = node_stats[a]
+        text = f"{a}\n{ns['talks']} реп · ↗{ns['out']} ↙{ns['in']}"
+        t = ax.text(tx, ty, text, fontsize=11, fontweight="bold",
+                    color=C_AXIS, ha=ha, va=va, zorder=10,
+                    family="DejaVu Sans")
+        t.set_path_effects([path_effects.withStroke(linewidth=3, foreground="white")])
+
+    # сетевые метрики — компактный блок в левом нижнем углу,
+    # чтобы не перекрывать узлы вверху графа
+    metrics_text = _format_network_metrics(G, node_stats, edge_stats)
+    ax.text(0.015, 0.015, metrics_text, transform=ax.transAxes,
+            fontsize=9, family="DejaVu Sans Mono",
+            verticalalignment="bottom", horizontalalignment="left",
+            bbox=dict(boxstyle="round,pad=0.5",
+                      facecolor="white", edgecolor="#cbd5e1",
+                      linewidth=0.8, alpha=0.95),
+            zorder=20)
+
+
+def _format_network_metrics(G, node_stats, edge_stats) -> str:
+    """Считает и форматирует сетевые метрики для info-box на главной панели."""
+    n = G.number_of_nodes()
+    m = G.number_of_edges()
+    density = nx.density(G) if n > 1 else 0.0
+    try:
+        reciprocity = nx.reciprocity(G) or 0.0
+    except Exception:
+        reciprocity = 0.0
+    try:
+        clustering = nx.transitivity(G)
+    except Exception:
+        clustering = 0.0
+    try:
+        n_components = nx.number_weakly_connected_components(G)
+    except Exception:
+        n_components = 1
+    total_msg = sum(s["talks"] for s in node_stats.values())
+    return (
+        "СЕТЕВЫЕ МЕТРИКИ\n"
+        f"  узлов:        {n}\n"
+        f"  рёбер:        {m}\n"
+        f"  density:      {density:.3f}\n"
+        f"  reciprocity:  {reciprocity:.3f}\n"
+        f"  clustering:   {clustering:.3f}\n"
+        f"  компонент:    {n_components}\n"
+        f"  сообщений:    {total_msg}"
+    )
+
+
+# === Панель центральностей ===
+def _draw_centrality_panel(ax, agents, node_stats, betweenness, agents_meta):
+    ax.set_facecolor(C_PANEL_BG)
+    ax.set_title("Центральности агентов",
+                 fontsize=12, color=C_AXIS, pad=10, fontweight="600", loc="left")
+
+    if not agents:
+        ax.axis("off"); return
+
+    # нормированные in/out
+    max_in = max((node_stats[a]["in"] for a in agents), default=1) or 1
+    max_out = max((node_stats[a]["out"] for a in agents), default=1) or 1
+    max_b = max(betweenness.values()) if betweenness else 0.0
+
+    sorted_agents = sorted(agents, key=lambda a: node_stats[a]["talks"], reverse=True)
+    y = list(range(len(sorted_agents)))
+    bar_h = 0.25
+
+    in_norm = [node_stats[a]["in"] / max_in for a in sorted_agents]
+    out_norm = [node_stats[a]["out"] / max_out for a in sorted_agents]
+    bet_norm = [(betweenness.get(a, 0.0) / max_b) if max_b > 0 else 0.0 for a in sorted_agents]
+
+    ax.barh([yi + bar_h for yi in y], in_norm, height=bar_h,
+            color="#3b82f6", label="in-degree", edgecolor="#1e40af", linewidth=0.5)
+    ax.barh(y, out_norm, height=bar_h,
+            color="#f97316", label="out-degree", edgecolor="#9a3412", linewidth=0.5)
+    ax.barh([yi - bar_h for yi in y], bet_norm, height=bar_h,
+            color="#a855f7", label="betweenness", edgecolor="#6b21a8", linewidth=0.5)
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(sorted_agents, fontsize=9.5, color=C_AXIS)
+    ax.set_ylim(-0.7, len(sorted_agents) - 0.3)
+    ax.set_xlim(0, 1.08)
+    ax.set_xlabel("норм. значение [0..1]", fontsize=9, color=C_AXIS)
+    ax.tick_params(axis="x", labelsize=8.5, colors=C_AXIS)
+    ax.tick_params(axis="y", colors=C_AXIS)
+    ax.grid(axis="x", color=C_GRID, alpha=0.6)
+    ax.set_axisbelow(True)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    for spine in ("left", "bottom"):
+        ax.spines[spine].set_color("#cbd5e1")
+
+    # Легенда — снизу под xlabel, чтобы не перекрывать ни бары, ни заголовок
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.10),
+              ncol=3, fontsize=9, frameon=False, handlelength=1.4,
+              columnspacing=1.6, handletextpad=0.5)
+
+
+# === Sociomatrix ===
+def _draw_sociomatrix(ax, agents, edge_stats):
+    ax.set_facecolor(C_PANEL_BG)
+    ax.set_title("Социограмма взаимодействий",
+                 fontsize=12, color=C_AXIS, pad=10, fontweight="600", loc="left")
+
+    n = len(agents)
+    if n == 0:
+        ax.axis("off"); return
+    # Матрица: rows=отправители, cols=получатели
+    counts = [[edge_stats.get((s, r), {}).get("count", 0) for r in agents] for s in agents]
+    tones = [[edge_stats.get((s, r), {}).get("avg_score", 0.0) for r in agents] for s in agents]
+
+    ax.set_xlim(-0.5, n - 0.5)
+    ax.set_ylim(n - 0.5, -0.5)  # ось Y перевёрнута, как у матриц
+    ax.set_aspect("equal")
+    ax.set_xticks(range(n))
+    ax.set_yticks(range(n))
+    # Подписи получателей — снизу, под наклоном, чтобы не наезжали на заголовок
+    ax.set_xticklabels(agents, fontsize=9, color=C_AXIS, rotation=30, ha="right")
+    ax.set_yticklabels(agents, fontsize=9, color=C_AXIS)
+    ax.set_xlabel("получатель", fontsize=9, color=C_AXIS, labelpad=6)
+    ax.set_ylabel("отправитель", fontsize=9, color=C_AXIS, labelpad=6)
+    ax.tick_params(top=False, bottom=True, labeltop=False, labelbottom=True,
+                   length=0, colors=C_AXIS)
+
+    for spine in ax.spines.values():
+        spine.set_color("#cbd5e1")
+
+    max_cnt = max((max(row) if row else 0) for row in counts) or 1
+    for i in range(n):
+        for j in range(n):
+            cnt = counts[i][j]
+            tone = tones[i][j]
+            if i == j:
+                # диагональ — серая
+                ax.add_patch(Rectangle((j - 0.5, i - 0.5), 1, 1,
+                                       facecolor="#e2e8f0", edgecolor="white", lw=1))
+                continue
+            if cnt == 0:
+                ax.add_patch(Rectangle((j - 0.5, i - 0.5), 1, 1,
+                                       facecolor="white", edgecolor="#e2e8f0", lw=0.5))
+                continue
+            base = tone_to_color(tone)
+            # яркость по числу сообщений: alpha
+            alpha = 0.30 + 0.70 * (cnt / max_cnt)
+            ax.add_patch(Rectangle((j - 0.5, i - 0.5), 1, 1,
+                                   facecolor=base, edgecolor="white", lw=1.5, alpha=alpha))
+            # надпись: count
+            text_col = "white" if cnt / max_cnt > 0.5 else C_AXIS
+            ax.text(j, i, str(cnt), ha="center", va="center",
+                    fontsize=10, fontweight="bold", color=text_col, zorder=5)
+
+
+# === Timeline ===
+def _draw_turn_timeline(ax, agents, history):
+    ax.set_facecolor(C_PANEL_BG)
+    ax.set_title("Хронология ходов",
+                 fontsize=12, color=C_AXIS, pad=10, fontweight="600", loc="left")
+
+    if not history:
+        ax.axis("off"); return
+
+    n = len(agents)
+    agent_idx = {a: i for i, a in enumerate(agents)}
+    total_turns = len(history)
+
+    ax.set_xlim(0.5, total_turns + 0.5)
+    ax.set_ylim(-0.6, n - 0.4)
+    ax.set_yticks(range(n))
+    ax.set_yticklabels(agents, fontsize=8.5, color=C_AXIS)
+    ax.set_xlabel("ход", fontsize=8.5, color=C_AXIS)
+    ax.tick_params(axis="x", labelsize=8, colors=C_AXIS)
+    ax.tick_params(axis="y", colors=C_AXIS)
+    ax.grid(axis="x", color=C_GRID, alpha=0.5, zorder=0)
+    ax.set_axisbelow(True)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    for spine in ("left", "bottom"):
+        ax.spines[spine].set_color("#cbd5e1")
+
+    # горизонтальные «дорожки» под каждого агента
+    for i in range(n):
+        ax.add_patch(Rectangle((0.5, i - 0.35), total_turns, 0.7,
+                               facecolor="white", edgecolor="none", alpha=0.6, zorder=0.5))
+
+    # каждый ход = маркер
+    for rec in history:
+        sp = rec.get("speaker")
+        if sp not in agent_idx:
+            continue
+        t = rec.get("turn", 0)
+        tone = (rec.get("tone") or "neutral").lower()
+        col = tone_to_color(TONE_SCORE.get(tone, 0.0))
+        ax.add_patch(Rectangle((t - 0.4, agent_idx[sp] - 0.3), 0.8, 0.6,
+                               facecolor=col, edgecolor="#0f172a", lw=0.4,
+                               alpha=0.92, zorder=3))
+
+
+# === Sparkline тренда тона ===
+def _draw_tone_trend(ax, history):
+    ax.set_facecolor(C_PANEL_BG)
+    ax.set_title("Тренд тона диалога",
+                 fontsize=12, color=C_AXIS, pad=10, fontweight="600", loc="left")
+    if not history:
+        ax.axis("off"); return
+
+    turns = [r.get("turn", i+1) for i, r in enumerate(history)]
+    tones = [TONE_SCORE.get((r.get("tone") or "neutral").lower(), 0.0) for r in history]
+    # Скользящее среднее по 3
+    smoothed = []
+    win = 3
+    for i in range(len(tones)):
+        lo = max(0, i - win // 2)
+        hi = min(len(tones), i + win // 2 + 1)
+        smoothed.append(sum(tones[lo:hi]) / max(1, hi - lo))
+
+    ax.set_xlim(min(turns) - 0.5, max(turns) + 0.5)
+    ax.set_ylim(-1.15, 1.15)
+    ax.tick_params(labelsize=8, colors=C_AXIS)
+    ax.set_xlabel("ход", fontsize=8.5, color=C_AXIS)
+    ax.set_ylabel("тон", fontsize=8.5, color=C_AXIS)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    for spine in ("left", "bottom"):
+        ax.spines[spine].set_color("#cbd5e1")
+    ax.grid(axis="y", color=C_GRID, alpha=0.5)
+    ax.set_axisbelow(True)
+
+    # горизонтальные зоны: позитив/нейтрал/негатив
+    ax.axhspan(0.3, 1.15, color=C_POS, alpha=0.06, zorder=0)
+    ax.axhspan(-0.3, 0.3, color=C_NEU, alpha=0.06, zorder=0)
+    ax.axhspan(-1.15, -0.3, color=C_NEG, alpha=0.06, zorder=0)
+    ax.axhline(0, color="#94a3b8", lw=0.7, ls="--", alpha=0.7)
+
+    # сырые точки — небольшие, прозрачные
+    for x, y in zip(turns, tones):
+        ax.scatter([x], [y], color=tone_to_color(y), s=40,
+                   edgecolors="#0f172a", linewidths=0.4, zorder=3, alpha=0.8)
+    # сглаженная кривая
+    ax.plot(turns, smoothed, color="#0f172a", lw=2.2, alpha=0.85, zorder=4)
+    # заливка под кривой
+    ax.fill_between(turns, smoothed, 0,
+                    where=[s >= 0 for s in smoothed],
+                    color=C_POS, alpha=0.15, interpolate=True, zorder=2)
+    ax.fill_between(turns, smoothed, 0,
+                    where=[s < 0 for s in smoothed],
+                    color=C_NEG, alpha=0.15, interpolate=True, zorder=2)
+
+
+# === Главный публичный API: обратносовместимая сигнатура ===
 def draw_interactions_pro(
     agents_meta: Dict[str, Dict[str, str]],
     history: List[Dict[str, Any]],
@@ -114,185 +507,112 @@ def draw_interactions_pro(
     title: str,
     window: int = 12,
     seed: int = 42,
-    top_edge_labels: int = 6,
-    per_message_edges: bool = True,
+    top_edge_labels: int = 6,        # параметр оставлен для обратной совместимости
+    per_message_edges: bool = True,  # параметр оставлен для обратной совместимости
 ):
-    """Visualization:
-    - Nodes: size ~ #messages, fill from agent color, outline by last emotion.
-    - Edges: color = avg tone (-1..1), width ~ frequency within window; curvature for reverse pairs.
-    - Metrics and legend in the right panel.
+    """Публикационного качества 4-панельный дашборд:
+       (A) сеть с глубиной (force-directed, центральности halo);
+       (B) центральности (Freeman/Borgatti);
+       (C) sociomatrix (Moreno);
+       (D) хронология ходов (Sacks et al.).
     """
     agents = list(agents_meta.keys())
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
     if not agents or not history:
-        # placeholder when insufficient data
-        plt.figure(figsize=(10, 6))
-        plt.title(title)
-        plt.text(0.5, 0.5, "Not enough data to draw graph", ha="center", va="center")
-        plt.savefig(out_path, dpi=160)
-        plt.close()
+        fig, ax = plt.subplots(figsize=(12, 7), facecolor=C_FIG_BG)
+        ax.set_facecolor(C_PANEL_BG)
+        ax.text(0.5, 0.5, "Недостаточно данных для построения сети",
+                ha="center", va="center", fontsize=13, color=C_AXIS)
+        ax.axis("off")
+        plt.savefig(out_path, dpi=150, facecolor=fig.get_facecolor())
+        plt.close(fig)
         return
 
-    # --- Node metrics
-    node_stats, edge_stats_agg = compute_stats(agents_meta, history, window)
+    # --- статистика
+    node_stats, edge_stats = compute_stats(agents_meta, history, window)
+    total_msg = sum(s["talks"] for s in node_stats.values())
+    max_msg = max((s["talks"] for s in node_stats.values()), default=1)
 
-    # --- Граф узлов
+    # --- граф
     G = nx.DiGraph()
     for a in agents:
         G.add_node(a)
-    pos = nx.spring_layout(G, seed=seed, k=1.2) if len(agents) > 2 else nx.circular_layout(G)
+    for (u, v), st in edge_stats.items():
+        G.add_edge(u, v, weight=st["count"])
+    # центральности
+    try:
+        betweenness = nx.betweenness_centrality(G, normalized=True) if len(agents) >= 3 else {a: 0.0 for a in agents}
+    except Exception:
+        betweenness = {a: 0.0 for a in agents}
 
-    # --- Figure: graph + metrics panel
-    fig = plt.figure(figsize=(12.5, 7.5))
-    gs = gridspec.GridSpec(1, 2, width_ratios=[2.2, 1.0], figure=fig, wspace=0.05)
-    ax = fig.add_subplot(gs[0])
-    ax_stats = fig.add_subplot(gs[1])
-    ax.set_title(title, fontsize=12, pad=10)
+    # позиции узлов — kamada-kawai даёт чистее, чем spring, для малых сетей
+    if len(agents) <= 2:
+        pos = nx.circular_layout(G, scale=1.0)
+    else:
+        try:
+            pos = nx.kamada_kawai_layout(G, scale=1.0)
+        except Exception:
+            pos = nx.spring_layout(G, seed=seed, k=1.4, scale=1.0)
 
-    # --- Nodes
-    base_node_size = 1200
-    sizes, facecolors, edgecolors, linewidths = [], [], [], []
-    for a in agents:
-        talks = node_stats[a]["talks"]
-        sizes.append(base_node_size + 80 * math.sqrt(max(talks, 1)))
-        facecolors.append(agents_meta[a].get("color", "#888888"))
-        emo = node_stats[a]["emotion"]
-        edgecolors.append(EMOTION_COLOR.get(emo, "#6b7280"))
-        linewidths.append(3.0)
-
-    # glow
-    nx.draw_networkx_nodes(G, pos, node_color=facecolors, node_size=[s*1.25 for s in sizes], alpha=0.08, ax=ax)
-    nx.draw_networkx_nodes(G, pos, node_color=facecolors, node_size=[s*1.10 for s in sizes], alpha=0.18, ax=ax)
-
-    nx.draw_networkx_nodes(
-        G, pos,
-        node_color=facecolors,
-        node_size=sizes,
-        linewidths=linewidths,
-        edgecolors=edgecolors,
-        ax=ax
+    # --- Figure: ландшафтный формат ≈5:3 (20×12), под широкий монитор.
+    # На widescreen-экране изображение с сохранением пропорций заполняет
+    # почти всю площадь панели — без растяжения, каждая подграфика чётко видна.
+    fig = plt.figure(figsize=(20, 12), facecolor=C_FIG_BG, dpi=150)
+    # 4-строчный grid: главная сеть (2 строки) + sociomatrix/trend (1 строка) + timeline (1 строка).
+    # hspace/wspace и поля подобраны так, чтобы заголовки панелей, подписи осей
+    # и легенды не накладывались друг на друга, но при этом не оставалось зияющих пустот.
+    gs = gridspec.GridSpec(
+        4, 2,
+        width_ratios=[1.22, 1.0],
+        height_ratios=[1.8, 1.8, 1.2, 0.9],
+        hspace=0.65, wspace=0.28,
+        left=0.05, right=0.98, top=0.90, bottom=0.10,
+        figure=fig,
     )
+    # главный граф — 2 строки слева
+    ax_net = fig.add_subplot(gs[0:2, 0])
+    # центральности — 2 строки справа
+    ax_cent = fig.add_subplot(gs[0:2, 1])
+    # средняя строка: sociomatrix слева, trend справа
+    ax_socio = fig.add_subplot(gs[2, 0])
+    ax_trend = fig.add_subplot(gs[2, 1])
+    # нижняя строка во всю ширину: turn timeline
+    ax_time = fig.add_subplot(gs[3, :])
 
-    labels = {}
-    for a in agents:
-        ns = node_stats[a]
-        labels[a] = f"{a}\n{ns['talks']} репл. · out:{ns['out']} in:{ns['in']}"
-    nx.draw_networkx_labels(G, pos, labels=labels, font_size=9, font_weight="bold", ax=ax)
+    # --- Заголовок и сабтайтл (без даты/таймстампа)
+    fig.text(0.06, 0.955, title, fontsize=26, fontweight="700",
+             color="#0f172a", family="DejaVu Sans")
+    subtitle = (
+        f"Анализ многоагентной диалоговой сети  ·  N={len(agents)} агент(ов)  ·  "
+        f"{total_msg} сообщений  ·  окно={window}"
+    )
+    fig.text(0.06, 0.928, subtitle, fontsize=13, color="#64748b",
+             family="DejaVu Sans", style="italic")
 
-    # === Edges ===
-    if per_message_edges:
-        # Each message in the last `window` turns is a separate arrow
-        last = history[-window:] if window > 0 else history[:]
-        # spread parallel arrows slightly via arc radius
-        def arc_for(i: int) -> float:
-            # 0.02..0.22 periodic to avoid overlapping arcs
-            return 0.02 + (i % 5) * 0.05
+    # --- Панели
+    _draw_main_network(ax_net, G, pos, agents, node_stats, edge_stats,
+                        agents_meta, history, window, betweenness, max_msg)
+    _draw_centrality_panel(ax_cent, agents, node_stats, betweenness, agents_meta)
+    _draw_sociomatrix(ax_socio, agents, edge_stats)
+    _draw_tone_trend(ax_trend, history)
+    _draw_turn_timeline(ax_time, agents, history)
 
-        drawn = 0
-        for i, rec in enumerate(last):
-            src = rec["speaker"]
-            dst = rec.get("target")
-            if not dst:
-                continue
-            tone = (rec.get("tone") or "neutral").lower()
-            col = tone_to_color(TONE_SCORE.get(tone, 0.0))
-            rad = 0.02 + (i % 5) * 0.05  # как у вас
-
-            arts = nx.draw_networkx_edges(
-                G, pos,
-                edgelist=[(src, dst)],
-                arrows=True,
-                arrowstyle="-|>",
-                arrowsize=26,
-                width=1.8,
-                edge_color=col,
-                connectionstyle=f"arc3,rad={rad}",
-                ax=ax,
-                alpha=0.95,
-                min_source_margin=18,
-                min_target_margin=18,
-            )
-            # ↑ функция возвращает список Patch-объектов
-            if arts:
-                for a in arts:
-                    a.set_zorder(3)      # поверх узлов
-                    a.set_clip_on(False) # не обрезать голову стрелки
-            drawn += 1
-
-        # no top-edge labels in per-message mode
-    else:
-        # Aggregated mode: label strongest edges
-        reversed_pairs = set()
-        for (u, v) in edge_stats_agg.keys():
-            if (v, u) in edge_stats_agg:
-                reversed_pairs.add((min(u, v), max(u, v)))
-
-        drawn_edges = []
-        for (u, v), est in sorted(edge_stats_agg.items(), key=lambda kv: kv[1]["count"], reverse=True):
-            cnt = est["count"]
-            score = est["avg_score"]
-            col = tone_to_color(score)
-            width = 1.2 + 0.9 * math.sqrt(cnt)
-            rad = 0.18 if (min(u, v), max(u, v)) in reversed_pairs else 0.06
-
-            e = nx.draw_networkx_edges(
-                G, pos, edgelist=[(src, dst)],
-                arrows=True,
-                arrowstyle="-|>",
-                arrowsize=24,
-                width=1.8,
-                edge_color=col,
-                connectionstyle=f"arc3,rad={rad}",
-                ax=ax,
-                alpha=0.95,
-                min_source_margin=18,
-                min_target_margin=18,
-                zorder=3,
-                clip_on=False,
-            )
-            if e:
-                drawn_edges.append(((u, v), cnt, score, col))
-
-        # labels for strongest edges
-        top = drawn_edges[:top_edge_labels]
-        for (u, v), cnt, score, col in top:
-            x = (pos[u][0] + pos[v][0]) / 2
-            y = (pos[u][1] + pos[v][1]) / 2
-            ax.text(x, y, f"{cnt}× · avg {score:+.2f}", fontsize=8, color=col,
-                    bbox=dict(boxstyle="round,pad=0.2", fc="white", ec=col, alpha=0.8))
-
-    ax.axis("off")
-
-    # === Right panel
-    ax_stats.set_facecolor("#fcfcfd")
-
-    # Top speakers
-    top_speakers = sorted(agents, key=lambda a: node_stats[a]["talks"], reverse=True)
-    y = list(reversed(top_speakers))
-    x = [node_stats[a]["talks"] for a in y]
-    bar_colors = [agents_meta[a].get("color", "#888") for a in y]
-    ax_stats.barh(y, x, color=bar_colors, edgecolor="#374151")
-    ax_stats.set_xlabel("messages")
-    ax_stats.set_title("Who speaks more", fontsize=10)
-
-    # Legend text for mode
-    if per_message_edges:
-        ax_stats.text(0.0, -0.15, f"Arrows: each message in the last {window} turns", transform=ax_stats.transAxes, fontsize=9)
-    else:
-        ax_stats.text(0.0, -0.15, f"Aggregated edges over the last {window} turns", transform=ax_stats.transAxes, fontsize=9)
-
-    ax_stats.grid(axis="x", alpha=0.25)
-    ax_stats.set_axisbelow(True)
-
-    legend_elems = [
-        Line2D([0], [0], color=C_NEG, lw=3, label="negative tone"),
-        Line2D([0], [0], color=C_NEU, lw=3, label="neutral"),
-        Line2D([0], [0], color=C_POS, lw=3, label="positive"),
-        Patch(facecolor="#ffffff", edgecolor="#111827", label="node outline = last emotion"),
-        Line2D([0], [0], color="#111111", lw=2, marker='>', markersize=8, label="arrow = 1 message"),
+    # --- Глобальная легенда тонов внизу
+    legend_handles = [
+        Line2D([0], [0], color=C_NEG, lw=3.5, label="негативный тон"),
+        Line2D([0], [0], color=C_NEU, lw=3.5, label="нейтральный"),
+        Line2D([0], [0], color=C_POS, lw=3.5, label="позитивный"),
+        Patch(facecolor="white", edgecolor="#0f172a", lw=2,
+              label="обводка узла — последняя эмоция"),
+        Patch(facecolor="#fbbf24", alpha=0.4, edgecolor="none",
+              label="halo узла — посредничество (betweenness)"),
     ]
-    ax_stats.legend(handles=legend_elems, loc="lower right", frameon=True)
+    fig.legend(handles=legend_handles, loc="lower center",
+               ncol=5, fontsize=9, frameon=False,
+               bbox_to_anchor=(0.5, 0.018))
 
-    plt.tight_layout()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(out_path, dpi=180)
-    plt.close()
+    fig.savefig(out_path, dpi=160, facecolor=fig.get_facecolor(),
+                bbox_inches=None, pad_inches=0.1)
+    plt.close(fig)

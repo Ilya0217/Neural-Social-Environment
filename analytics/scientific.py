@@ -866,12 +866,26 @@ def generate_scientific_hypotheses(analysis: ScientificAnalysisResult, agents: L
             "norming": "Команда в межличностной фазе (Interpersonal). Рекомендуется: управление аффектом, разрешение конфликтов, укрепление мотивации и доверия.",
             "performing": "Команда в фазе действия (Action). Рекомендуется: координация задач, мониторинг систем, поддержание распределённого лидерства.",
         }
+        stage_indicators = analysis.group_stage.get("indicators", {}) or {}
         hypotheses.append({
             "category": "Team Dynamics",
             "framework": "Team Temporal Dynamics (Shuffler et al., 2018)",
             "finding": f"Текущая фаза: {stage.upper()} (уверенность: {confidence:.0%})",
             "recommendation": stage_advice.get(stage, ""),
             "reference": "Shuffler, M. L., et al. (2018). The science of multiteam systems. Small Group Research, 49(6), 659-681. See also: Mathieu, J. E., et al. (2017). Journal of Applied Psychology, 102(3), 452-467.",
+            "brief_report": {
+                "method": "Детектор фазы команды агрегирует индикаторы (вовлечённость, конфликтность, сплочённость) и сопоставляет с моделью Tuckman/Shuffler.",
+                "metrics": {
+                    "Фаза": stage.upper(),
+                    "Уверенность модели": f"{confidence:.0%}",
+                    **{k.replace('_', ' ').title(): f"{v:.2f}" for k, v in stage_indicators.items()},
+                },
+                "interpretation": (
+                    f"Уверенность {confidence:.0%} превысила порог 30% — классификация считается надёжной. "
+                    f"Фаза '{stage}' определяет, какие командные процессы (transition/action/interpersonal) сейчас доминируют, "
+                    f"и подсказывает, на чём фокусировать модерацию."
+                ),
+            },
         })
     
     # --- ISO 24617-2 Dialogue Act Taxonomy (Bunt et al., 2020) ---
@@ -880,6 +894,8 @@ def generate_scientific_hypotheses(analysis: ScientificAnalysisResult, agents: L
         task_ratio = dialogue_acts.get("task_ratio", 0)
         pos_neg_ratio = dialogue_acts.get("positive_negative_ratio", 1)
         
+        socio_ratio = dialogue_acts.get("socio_ratio", 0)
+        areas = dialogue_acts.get("areas", {}) or {}
         if task_ratio > 0.7:
             hypotheses.append({
                 "category": "Dialogue Structure",
@@ -887,6 +903,20 @@ def generate_scientific_hypotheses(analysis: ScientificAnalysisResult, agents: L
                 "finding": f"Высокая задачная ориентация ({task_ratio:.0%}). Преобладают информационные диалоговые акты.",
                 "recommendation": "Сбалансируйте с социальными актами (feedback, social obligation management) для поддержания вовлечённости.",
                 "reference": "Bunt, H., et al. (2020). ISO 24617-2: Revision of a standard for dialogue act annotation. Proc. LREC 2020.",
+                "brief_report": {
+                    "method": "Каждое сообщение классифицировано по таксономии ISO 24617-2 на task / socio-emotional / task-management акты.",
+                    "metrics": {
+                        "Task ratio": f"{task_ratio:.0%}",
+                        "Socio-emotional ratio": f"{socio_ratio:.0%}",
+                        "Pos/Neg ratio": f"{pos_neg_ratio:.2f}",
+                        **{k.replace('_', ' ').title(): f"{v:.0%}" for k, v in areas.items()},
+                    },
+                    "interpretation": (
+                        f"Task-ratio {task_ratio:.0%} > 70% — порог высокой задачной ориентации. "
+                        "По Bales (1950) и Bunt et al. (2020) такой профиль типичен для решения проблем, "
+                        "но при затяжной длительности снижает групповую вовлечённость."
+                    ),
+                },
             })
         elif task_ratio < 0.3:
             hypotheses.append({
@@ -895,8 +925,22 @@ def generate_scientific_hypotheses(analysis: ScientificAnalysisResult, agents: L
                 "finding": f"Низкая задачная ориентация ({task_ratio:.0%}). Преобладают социальные диалоговые акты.",
                 "recommendation": "Направьте дискуссию к информационным актам (inform, question) для продвижения к решениям.",
                 "reference": "Bunt, H., et al. (2020). ISO 24617-2: Revision of a standard for dialogue act annotation. Proc. LREC 2020.",
+                "brief_report": {
+                    "method": "Каждое сообщение классифицировано по таксономии ISO 24617-2 на task / socio-emotional / task-management акты.",
+                    "metrics": {
+                        "Task ratio": f"{task_ratio:.0%}",
+                        "Socio-emotional ratio": f"{socio_ratio:.0%}",
+                        "Pos/Neg ratio": f"{pos_neg_ratio:.2f}",
+                        **{k.replace('_', ' ').title(): f"{v:.0%}" for k, v in areas.items()},
+                    },
+                    "interpretation": (
+                        f"Task-ratio {task_ratio:.0%} < 30% — порог низкой задачной ориентации. "
+                        "Группа застряла в обсуждении отношений/настроения; продвижение к решениям требует "
+                        "увеличения доли inform/question актов."
+                    ),
+                },
             })
-        
+
         if pos_neg_ratio < 1:
             hypotheses.append({
                 "category": "Dialogue Structure",
@@ -904,6 +948,19 @@ def generate_scientific_hypotheses(analysis: ScientificAnalysisResult, agents: L
                 "finding": "Негативные социальные акты (disagreement, negative feedback) преобладают над позитивными.",
                 "recommendation": "Увеличьте позитивные акты (agreement, acknowledgement) для улучшения атмосферы.",
                 "reference": "Bunt, H., et al. (2020). ISO 24617-2: Revision of a standard for dialogue act annotation. Proc. LREC 2020.",
+                "brief_report": {
+                    "method": "Подсчитано отношение позитивных социальных актов (agreement, acknowledgement) к негативным (disagreement, negative feedback).",
+                    "metrics": {
+                        "Pos/Neg ratio": f"{pos_neg_ratio:.2f}",
+                        "Task ratio": f"{task_ratio:.0%}",
+                        "Socio-emotional ratio": f"{socio_ratio:.0%}",
+                    },
+                    "interpretation": (
+                        f"Соотношение {pos_neg_ratio:.2f} < 1.0 означает, что негативные акты численно перевешивают. "
+                        "По модели Losada (2004) для здоровой группы соотношение должно быть ≥ 3:1; "
+                        "текущий уровень — индикатор риска эскалации конфликта."
+                    ),
+                },
             })
     
     # --- Multidimensional Networks in Teams (Contractor et al., 2012) ---
@@ -914,21 +971,57 @@ def generate_scientific_hypotheses(analysis: ScientificAnalysisResult, agents: L
             key=lambda x: x[1].get("total_centrality", 0)
         )
         if max_central[1].get("total_centrality", 0) > 0.7:
+            top3 = sorted(
+                analysis.centrality.items(),
+                key=lambda x: -x[1].get("total_centrality", 0),
+            )[:3]
             hypotheses.append({
                 "category": "Network Structure",
                 "framework": "Multidimensional Networks (Contractor et al., 2012)",
                 "finding": f"Агент '{max_central[0]}' занимает центральную позицию в сети ({max_central[1]['total_centrality']:.0%}).",
                 "recommendation": "Высокая централизация указывает на потенциальную информационную зависимость. Рассмотрите распределённое лидерство.",
                 "reference": "Contractor, N. S., et al. (2012). Testing multitheoretical, multilevel hypotheses about organizational networks. Academy of Management Review, 31(3), 681-703.",
+                "brief_report": {
+                    "method": "По направленному графу адресации посчитаны in/out/total-центральности (Freeman, 1979). Лидер — узел с максимальной total-centrality.",
+                    "metrics": {
+                        f"{a} (total)": f"{d.get('total_centrality', 0):.0%}"
+                        for a, d in top3
+                    } | {
+                        f"{max_central[0]} (in)": f"{max_central[1].get('in_centrality', 0):.0%}",
+                        f"{max_central[0]} (out)": f"{max_central[1].get('out_centrality', 0):.0%}",
+                    },
+                    "interpretation": (
+                        f"Центральность {max_central[1]['total_centrality']:.0%} > 70% — порог гипер-централизации. "
+                        f"'{max_central[0]}' стал ключевым каналом информации; "
+                        "при его выпадении группа теряет координацию (single point of failure)."
+                    ),
+                },
             })
-    
+
     if analysis.network_density < 0.5:
+        n = len(agents)
+        max_edges = n * (n - 1) if n > 1 else 1
+        actual_edges = int(round(analysis.network_density * max_edges))
         hypotheses.append({
             "category": "Network Structure",
             "framework": "Relational Event Networks (Leenders et al., 2016)",
             "finding": f"Низкая плотность сети ({analysis.network_density:.0%}). Структурные дыры в коммуникации.",
             "recommendation": "Стимулируйте коммуникацию между изолированными участниками для увеличения сетевой связности.",
             "reference": "Leenders, R. Th. A. J., et al. (2016). Once upon a time: Understanding team processes as relational event networks. Organizational Psychology Review, 6(1), 92-115.",
+            "brief_report": {
+                "method": "Плотность = реальные направленные рёбра / максимально возможные (N×(N-1)) для направленного графа.",
+                "metrics": {
+                    "Плотность": f"{analysis.network_density:.0%}",
+                    "Кластеризация": f"{analysis.clustering_coefficient:.2f}",
+                    "Узлов": str(n),
+                    "Активных рёбер": f"{actual_edges} из {max_edges}",
+                },
+                "interpretation": (
+                    f"Плотность {analysis.network_density:.0%} < 50% — порог разреженной сети. "
+                    "По Burt (2004) структурные дыры дают информационные преимущества отдельным брокерам, "
+                    "но снижают общую групповую координацию и коллективное обучение."
+                ),
+            },
         })
     
     # --- Network Dynamics & Team Performance (Reagans et al., 2016) ---
@@ -940,14 +1033,31 @@ def generate_scientific_hypotheses(analysis: ScientificAnalysisResult, agents: L
             if data.get("sociometric_status", 0) < 0.3
         ]
         if isolated:
+            iso_metrics = {
+                a: f"{social_cap['agents'][a].get('sociometric_status', 0):.0%}"
+                for a in isolated
+            }
             hypotheses.append({
                 "category": "Network Dynamics",
                 "framework": "Team Chemistry (Reagans et al., 2016)",
                 "finding": f"Участники с низким сетевым статусом: {', '.join(isolated)}",
                 "recommendation": "Низкая интеграция этих участников снижает командную химию. Активнее вовлекайте их для развития сетевых связей.",
                 "reference": "Reagans, R., Miber, B., & McEvily, B. (2016). Team chemistry. Social Networks, 45, 14-28.",
+                "brief_report": {
+                    "method": "Социометрический статус = доля исходящих/входящих связей участника от максимально возможных.",
+                    "metrics": {
+                        "Изолированных участников": str(len(isolated)),
+                        "Всего агентов": str(len(social_cap.get("agents", {}))),
+                        **{f"{a} (status)": v for a, v in iso_metrics.items()},
+                    },
+                    "interpretation": (
+                        "Статус < 30% означает, что эти участники получают и инициируют значительно меньше "
+                        "взаимодействий, чем ожидается при равном распределении. "
+                        "По Reagans et al. (2016) изолированные узлы снижают передачу знаний и общую team chemistry."
+                    ),
+                },
             })
-        
+
         cohesion = social_cap.get("group_cohesion", 0)
         if cohesion < 0.3:
             hypotheses.append({
@@ -956,6 +1066,19 @@ def generate_scientific_hypotheses(analysis: ScientificAnalysisResult, agents: L
                 "finding": f"Низкая реляционная координация ({cohesion:.0%}). Мало взаимных связей.",
                 "recommendation": "Развивайте общие цели, взаимное уважение и частую коммуникацию для повышения координации.",
                 "reference": "Leenders, R. Th. A. J., et al. (2016). Once upon a time: Understanding team processes as relational event networks. Organizational Psychology Review, 6(1), 92-115.",
+                "brief_report": {
+                    "method": "Групповая сплочённость считается через долю реципрокных диад (A↔B) от всех возможных пар.",
+                    "metrics": {
+                        "Group cohesion": f"{cohesion:.0%}",
+                        "Network density": f"{analysis.network_density:.0%}",
+                        "Clustering": f"{analysis.clustering_coefficient:.2f}",
+                    },
+                    "interpretation": (
+                        f"Сплочённость {cohesion:.0%} < 30% — порог фрагментированной сети. "
+                        "В реляционной модели Leenders et al. (2016) низкая reciprocity предсказывает "
+                        "затруднённый информационный обмен и слабое чувство «мы» в группе."
+                    ),
+                },
             })
     
     # --- High-Dimensional Emotion Model (Cowen & Keltner, 2017; Demszky et al., 2020) ---
@@ -969,15 +1092,45 @@ def generate_scientific_hypotheses(analysis: ScientificAnalysisResult, agents: L
                 "finding": f"Преобладание негативных эмоций ({negative_emotions:.0%}): гнев, страх, печаль.",
                 "recommendation": "Обратите внимание на эмоциональный климат. Используйте техники регуляции аффекта.",
                 "reference": "Cowen, A. S., & Keltner, D. (2017). Self-report captures 27 distinct categories of emotion. PNAS, 114(38), E7900-E7909.",
+                "brief_report": {
+                    "method": "Эмоция каждой реплики извлечена LLM и агрегирована в распределение по 27-категорийной модели Cowen & Keltner.",
+                    "metrics": {
+                        "Гнев": f"{emotions.get('anger', 0):.0%}",
+                        "Страх": f"{emotions.get('fear', 0):.0%}",
+                        "Печаль": f"{emotions.get('sadness', 0):.0%}",
+                        "Сумма негативных": f"{negative_emotions:.0%}",
+                        "Доминирующая": analysis.dominant_emotion,
+                    },
+                    "interpretation": (
+                        f"Суммарно негативные эмоции {negative_emotions:.0%} > 40% — порог напряжённого климата. "
+                        "По Barsade (2002) эмоциональное заражение усиливает доминирующий аффект; "
+                        "без интервенции группа рискует перейти в spiral of negativity (Walter & Bruch, 2008)."
+                    ),
+                },
             })
-        
-        if emotions.get("anticipation", 0) + emotions.get("joy", 0) > 0.5:
+
+        pos_sum = emotions.get("anticipation", 0) + emotions.get("joy", 0)
+        if pos_sum > 0.5:
             hypotheses.append({
                 "category": "Emotional Climate",
                 "framework": "GoEmotions (Demszky et al., 2020)",
                 "finding": "Позитивный эмоциональный фон: преобладают ожидание и радость.",
                 "recommendation": "Используйте позитивный настрой для продвижения к решениям.",
                 "reference": "Demszky, D., et al. (2020). GoEmotions: A dataset of fine-grained emotions. Proceedings of ACL 2020.",
+                "brief_report": {
+                    "method": "Эмоции реплик размечены LLM в таксономии GoEmotions; посчитана сумма по позитивным категориям.",
+                    "metrics": {
+                        "Joy": f"{emotions.get('joy', 0):.0%}",
+                        "Anticipation": f"{emotions.get('anticipation', 0):.0%}",
+                        "Сумма позитивных": f"{pos_sum:.0%}",
+                        "Доминирующая": analysis.dominant_emotion,
+                    },
+                    "interpretation": (
+                        f"Сумма {pos_sum:.0%} > 50% — порог отчётливо позитивного климата. "
+                        "По Fredrickson (broaden-and-build, 2001) позитивные эмоции расширяют когнитивный репертуар "
+                        "и облегчают творческое решение задач."
+                    ),
+                },
             })
     
     # --- Language Style Matching & LIWC (Tausczik & Pennebaker, 2010; Gonzales et al., 2010) ---
@@ -991,8 +1144,21 @@ def generate_scientific_hypotheses(analysis: ScientificAnalysisResult, agents: L
                 "finding": f"Неравномерное распределение реплик (Gini = {gini:.2f}).",
                 "recommendation": "Неравное участие снижает Language Style Matching и предсказывает низкую групповую сплочённость. Модерируйте для равного участия.",
                 "reference": "Gonzales, A. L., Hancock, J. T., & Pennebaker, J. W. (2010). Language style matching as a predictor of social dynamics. Communication Research, 37(1), 3-19.",
+                "brief_report": {
+                    "method": "Коэффициент Джини посчитан по числу реплик каждого агента (0 — идеально равно, 1 — монолог).",
+                    "metrics": {
+                        "Gini-индекс": f"{gini:.2f}",
+                        "Self-selection rate": f"{turn.get('self_selection_rate', 0):.0%}",
+                        "Adjacency completion": f"{turn.get('adjacency_completion_rate', 0):.0%}",
+                    },
+                    "interpretation": (
+                        f"Gini {gini:.2f} > 0.30 — порог заметного неравенства. "
+                        "По Gonzales et al. (2010) асимметрия реплик коррелирует с падением LSM (Language Style Matching), "
+                        "что предсказывает снижение групповой сплочённости и качества решений."
+                    ),
+                },
             })
-        
+
         adj_rate = turn.get("adjacency_completion_rate", 0)
         if adj_rate < 0.5:
             hypotheses.append({
@@ -1001,6 +1167,19 @@ def generate_scientific_hypotheses(analysis: ScientificAnalysisResult, agents: L
                 "finding": f"Низкий показатель завершения смежных пар ({adj_rate:.0%}). Вопросы часто остаются без ответа.",
                 "recommendation": "Незавершённые диалоговые пары снижают координацию. Обеспечьте, чтобы адресованные вопросы получали ответы.",
                 "reference": "Tausczik, Y. R., & Pennebaker, J. W. (2010). The psychological meaning of words: LIWC and computerized text analysis. Journal of Language and Social Psychology, 29(1), 24-54.",
+                "brief_report": {
+                    "method": "Adjacency completion rate = доля адресованных запросов (question/request), на которые целевой агент ответил в следующих 1-2 ходах.",
+                    "metrics": {
+                        "Adjacency completion": f"{adj_rate:.0%}",
+                        "Gini-индекс": f"{gini:.2f}",
+                        "Self-selection rate": f"{turn.get('self_selection_rate', 0):.0%}",
+                    },
+                    "interpretation": (
+                        f"Adjacency completion {adj_rate:.0%} < 50% — половина адресованных реплик «висит» в воздухе. "
+                        "По Sacks/Schegloff/Jefferson (1974) незакрытые смежные пары разрушают conversational coherence "
+                        "и ведут к параллельным несвязанным потокам обсуждения."
+                    ),
+                },
             })
     
     # --- Computational Dialogue Analysis (Jurafsky & Martin, 2024) ---
@@ -1013,8 +1192,22 @@ def generate_scientific_hypotheses(analysis: ScientificAnalysisResult, agents: L
                 "finding": f"Высокая доля директивов ({speech['directive']:.0%}): команды, просьбы, предложения.",
                 "recommendation": "Убедитесь, что директивы соответствуют условиям успешности (felicity conditions) и воспринимаются как предложения.",
                 "reference": "Jurafsky, D., & Martin, J. H. (2024). Speech and Language Processing (3rd ed.). Stanford University.",
+                "brief_report": {
+                    "method": "Каждая реплика отнесена к 5 классам Searle: assertive, directive, commissive, expressive, declarative.",
+                    "metrics": {
+                        "Directive": f"{speech.get('directive', 0):.0%}",
+                        "Assertive": f"{speech.get('assertive', 0):.0%}",
+                        "Expressive": f"{speech.get('expressive', 0):.0%}",
+                        "Commissive": f"{speech.get('commissive', 0):.0%}",
+                    },
+                    "interpretation": (
+                        f"Директивы {speech['directive']:.0%} > 40% — порог высокой императивности. "
+                        "По Searle (1969) директивы накладывают обязательства на адресата; "
+                        "избыток без вежливых маркеров вызывает реактанс и снижает добровольное сотрудничество."
+                    ),
+                },
             })
-        
+
         if speech.get("expressive", 0) < 0.1:
             hypotheses.append({
                 "category": "Speech Acts",
@@ -1022,8 +1215,21 @@ def generate_scientific_hypotheses(analysis: ScientificAnalysisResult, agents: L
                 "finding": "Мало экспрессивных актов (благодарность, поддержка, эмоции).",
                 "recommendation": "Экспрессивные акты важны для эмоциональной регуляции в группе. Поощряйте эмоциональную поддержку.",
                 "reference": "Mohammad, S. M., et al. (2018). SemEval-2018 Task 1: Affect in Tweets. Proceedings of SemEval-2018.",
+                "brief_report": {
+                    "method": "Подсчитана доля реплик класса expressive (благодарности, извинения, эмоциональные оценки) от общего числа.",
+                    "metrics": {
+                        "Expressive": f"{speech.get('expressive', 0):.0%}",
+                        "Directive": f"{speech.get('directive', 0):.0%}",
+                        "Assertive": f"{speech.get('assertive', 0):.0%}",
+                    },
+                    "interpretation": (
+                        f"Expressive {speech.get('expressive', 0):.0%} < 10% — порог эмоциональной «сухости». "
+                        "По Tausczik & Pennebaker (2010) экспрессивы — основной канал социо-эмоциональной поддержки; "
+                        "их дефицит снижает чувство принадлежности и психологической безопасности."
+                    ),
+                },
             })
-    
+
     if not hypotheses:
         hypotheses.append({
             "category": "General",
@@ -1031,6 +1237,18 @@ def generate_scientific_hypotheses(analysis: ScientificAnalysisResult, agents: L
             "finding": "Коммуникация проходит в пределах нормы по всем научным показателям.",
             "recommendation": "Продолжайте в том же духе.",
             "reference": "N/A",
+            "brief_report": {
+                "method": "Все детекторы (фаза, диалоговые акты, сеть, эмоции, turn-taking, speech acts) проверены на отклонения от нормативных порогов.",
+                "metrics": {
+                    "Плотность сети": f"{analysis.network_density:.0%}",
+                    "Кластеризация": f"{analysis.clustering_coefficient:.2f}",
+                    "Доминирующая эмоция": analysis.dominant_emotion,
+                },
+                "interpretation": (
+                    "Ни один из детекторов не сработал — метрики в пределах референсных диапазонов. "
+                    "Группа демонстрирует здоровую коммуникативную динамику по всем измеряемым осям."
+                ),
+            },
         })
     
     return hypotheses

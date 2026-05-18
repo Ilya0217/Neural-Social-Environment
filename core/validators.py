@@ -130,25 +130,44 @@ class GrammaticalValidator(BaseValidator):
 
 
 class LanguageValidator(BaseValidator):
-    """Ensures English-only constraint"""
-    
+    """Validates that reply matches the configured dialogue language.
+
+    Reads `context['language']`:
+      - 'ru' (default): требует наличия кириллицы; ASCII-only ответ — критическая ошибка.
+      - 'en':           запрещает кириллицу.
+    """
+
     def __init__(self):
         super().__init__("Language")
-    
+
     def validate(self, turn_data: Dict[str, Any], context: Dict[str, Any]) -> List[ValidationResult]:
         results = []
-        reply = turn_data.get("reply", "")
-        
-        # Simple heuristic: check for Cyrillic characters
-        if re.search(r'[а-яА-ЯёЁ]', reply):
-            results.append(ValidationResult(
-                level=ValidationLevel.CRITICAL,
-                validator_name=self.name,
-                message="Reply contains non-English (Cyrillic) characters",
-                field="reply",
-                suggestion="Use English only"
-            ))
-        
+        reply = turn_data.get("reply", "") or ""
+        lang = str(context.get("language") or "ru").lower()
+        has_cyr = bool(re.search(r'[а-яА-ЯёЁ]', reply))
+        # Берём английские буквы за пределами цитат имён собственных
+        has_latin_word = bool(re.search(r'[a-zA-Z]{4,}', reply))
+
+        if lang == "en":
+            if has_cyr:
+                results.append(ValidationResult(
+                    level=ValidationLevel.CRITICAL,
+                    validator_name=self.name,
+                    message="Reply contains non-English (Cyrillic) characters",
+                    field="reply",
+                    suggestion="Use English only"
+                ))
+        elif lang == "ru":
+            # Если в реплике нет вообще ни одного кириллического символа, но есть длинные английские слова —
+            # значит модель ответила на английском, а должна на русском.
+            if not has_cyr and has_latin_word:
+                results.append(ValidationResult(
+                    level=ValidationLevel.CRITICAL,
+                    validator_name=self.name,
+                    message="Reply is in English, but dialogue language is Russian",
+                    field="reply",
+                    suggestion="Reply in Russian (Cyrillic)"
+                ))
         return results
 
 
