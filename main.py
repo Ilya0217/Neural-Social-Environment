@@ -71,7 +71,7 @@ def main():
                     agents_meta=agents_meta,
                     history=list(dm.history),
                     out_path=out_path,
-                    title=f"Interactions and tones (up to turn {turn})",
+                    title=f"Сеть взаимодействий — ход {turn}",
                     window=VIZ_EDGE_WINDOW,
                     seed=VIZ_SEED,
                     top_edge_labels=0,

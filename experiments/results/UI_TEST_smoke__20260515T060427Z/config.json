@@ -1,0 +1,36 @@
+{
+  "experiment_id": "UI_TEST_smoke",
+  "intervention_treatment": {
+    "type": "TraitIntervention",
+    "name": "treatment",
+    "target_agent": "Critic",
+    "descriptor": "do(agreeableness[Critic] = 0.90)",
+    "trait": "agreeableness",
+    "value": 0.9
+  },
+  "intervention_control": {
+    "type": "TraitIntervention",
+    "name": "control",
+    "target_agent": "Critic",
+    "descriptor": "do(agreeableness[Critic] = 0.10)",
+    "trait": "agreeableness",
+    "value": 0.1
+  },
+  "n_pairs": 2,
+  "seed_base": 9000,
+  "n_turns": 4,
+  "env_context_index": 0,
+  "parallelism": 2,
+  "outcome_metrics": [
+    "avg_tone",
+    "avg_reply_length",
+    "actionability_rate",
+    "reciprocity",
+    "emotion_entropy",
+    "question_rate"
+  ],
+  "alpha": 0.05,
+  "d_threshold": 0.3,
+  "alternative": "two-sided",
+  "description": ""
+}
