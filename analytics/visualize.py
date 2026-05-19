@@ -139,134 +139,155 @@ def compute_stats(agents_meta: Dict[str, Dict[str, str]],
 def _draw_main_network(ax, G, pos, agents, node_stats, edge_stats,
                        agents_meta, history, window, betweenness,
                        max_messages):
-    """Главная панель: force-directed network с глубиной."""
-    ax.set_facecolor(C_PANEL_BG)
-    ax.set_xlim(-1.45, 1.45)
-    ax.set_ylim(-1.45, 1.45)
+    """Главная панель: чистая направленная сеть.
+
+    Принципы качественной визуализации:
+      • круговая раскладка для N ≤ 10 → узлы равномерно по кругу, без наложений;
+      • узлы заметно меньше доступного пространства → много «воздуха»;
+      • одно ребро на пару (sender→target), агрегированное;
+      • реципрокные пары разводятся симметричными дугами в противоположные стороны;
+      • крупные явные стрелки (head_length/head_width в явных точках);
+      • shrinkA/shrinkB точно подогнаны под радиус узла → стрелка касается границы;
+      • подписи в белых пилюлях, радиально снаружи от каждого узла.
+    """
+    ax.set_facecolor("#ffffff")
+    # Чуть больший диапазон — нужен запас на подписи снаружи круга.
+    ax.set_xlim(-1.95, 1.95)
+    ax.set_ylim(-1.95, 1.95)
     ax.set_aspect("equal")
     ax.axis("off")
 
-    # Лёгкий "холст" — научная сетка как полярные направляющие
-    for r in (0.5, 1.0, 1.35):
-        circ = Circle((0, 0), r, fill=False, ec=C_GRID, lw=0.6, ls="--", alpha=0.7, zorder=0)
-        ax.add_patch(circ)
-    ax.plot([-1.4, 1.4], [0, 0], color=C_GRID, lw=0.5, alpha=0.5, zorder=0)
-    ax.plot([0, 0], [-1.4, 1.4], color=C_GRID, lw=0.5, alpha=0.5, zorder=0)
+    # === Раскладка: круговая для малых графов (гарантированно без наложений) ===
+    n_agents = len(agents)
+    if n_agents <= 10:
+        pos = nx.circular_layout(G, scale=1.25)
+    # Для очень больших графов оставляем kamada_kawai (передан извне),
+    # просто масштабируем положения наружу.
+    else:
+        pos = {a: (p[0] * 1.35, p[1] * 1.35) for a, p in pos.items()}
 
-    # --- РЁБРА: каждое сообщение из окна = отдельная стрелка с тоновым цветом ---
-    recent = history[-window:] if window > 0 else list(history)
-    # сгруппируем индексы по парам — нужно для разнесения стрелок (arc radius)
-    arc_seen: Dict[Tuple[str, str], int] = {}
-    for rec in recent:
-        sp, tgt = rec["speaker"], rec.get("target")
-        if not tgt or sp not in pos or tgt not in pos:
-            continue
-        tone = (rec.get("tone") or "neutral").lower()
-        col = tone_to_color(TONE_SCORE.get(tone, 0.0))
-        k = (sp, tgt)
-        arc_seen[k] = arc_seen.get(k, 0) + 1
-        # параллельные стрелки разносим небольшими дугами
-        rad = 0.05 + 0.05 * ((arc_seen[k] - 1) % 5)
-        # обратная пара — заметная дуга
-        if (tgt, sp) in arc_seen and arc_seen.get((tgt, sp), 0) > 0:
-            rad += 0.12
-
-        # тень рёбер для эффекта глубины
-        shadow = FancyArrowPatch(
-            pos[sp], pos[tgt],
-            connectionstyle=f"arc3,rad={rad}",
-            arrowstyle="-|>", mutation_scale=18,
-            linewidth=4.5, color="#000000", alpha=0.06,
-            zorder=1.5, shrinkA=20, shrinkB=22,
+    # === Радиусы узлов: умеренные, чтобы не «съесть» пространство ===
+    R_MIN, R_MAX = 0.11, 0.18
+    def node_radius(talks):
+        return R_MIN + (R_MAX - R_MIN) * (
+            math.log1p(talks) / math.log1p(max(max_messages, 1))
         )
-        ax.add_patch(shadow)
 
+    radii = {a: node_radius(node_stats[a]["talks"]) for a in agents if a in pos}
+
+    # === Сколько display-points занимает 1 axis-unit (для shrinkA/shrinkB) ===
+    # Аппроксимация: получается из размера панели. Берём bbox оси в дюймах.
+    bbox = ax.get_window_extent().transformed(ax.figure.dpi_scale_trans.inverted())
+    panel_width_in = max(bbox.width, 0.1)
+    axis_span = 3.9  # xlim from -1.95 to 1.95
+    points_per_axis_unit = (panel_width_in / axis_span) * 72.0
+
+    def _shrink(node_a: str) -> float:
+        r = radii.get(node_a, R_MIN)
+        # +5 точек — небольшой зазор между стрелкой и краем узла.
+        return r * points_per_axis_unit + 5.0
+
+    # === Рёбра: агрегированные, цвет=тон, толщина=log(count) ===
+    if edge_stats:
+        max_count = max(st["count"] for st in edge_stats.values()) or 1
+    else:
+        max_count = 1
+
+    def _edge_width(count: int) -> float:
+        # от 2.2 (для 1 сообщения) до 5.5 (для max)
+        return 2.2 + 3.3 * (math.log1p(count) / math.log1p(max_count))
+
+    for (sp, tgt), st in edge_stats.items():
+        if sp not in pos or tgt not in pos:
+            continue
+        count = st["count"]
+        if count <= 0:
+            continue
+
+        # Реципрокные пары: оба ребра дугами в противоположные стороны.
+        reciprocal = (tgt, sp) in edge_stats and edge_stats[(tgt, sp)]["count"] > 0
+        rad = 0.20 if reciprocal else 0.0
+        col = tone_to_color(st["avg_score"])
+        width = _edge_width(count)
+
+        # Большие явные наконечники: head_length / head_width в точках.
         arrow = FancyArrowPatch(
             pos[sp], pos[tgt],
             connectionstyle=f"arc3,rad={rad}",
-            arrowstyle="-|>", mutation_scale=14,
-            linewidth=1.7, color=col, alpha=0.92,
-            zorder=2, shrinkA=18, shrinkB=20,
+            arrowstyle="-|>,head_length=14,head_width=10",
+            mutation_scale=1.0,
+            linewidth=width,
+            color=col,
+            alpha=0.95,
+            zorder=2,
+            shrinkA=_shrink(sp),
+            shrinkB=_shrink(tgt),
+            capstyle="round",
+            joinstyle="round",
         )
         ax.add_patch(arrow)
 
-    # --- УЗЛЫ с эффектом объёма ---
-    # размер: логарифмическая шкала (научный стандарт)
-    def node_radius(talks):
-        # talks 0..max → radius 0.10..0.20
-        return 0.10 + 0.10 * (math.log1p(talks) / math.log1p(max(max_messages, 1)))
+        # Бейдж с количеством сообщений (только если ≥2 — иначе шум).
+        if count >= 2:
+            mx, my = (pos[sp][0] + pos[tgt][0]) / 2, (pos[sp][1] + pos[tgt][1]) / 2
+            if rad != 0:
+                # Смещаем перпендикулярно по нормали к ребру для дуги.
+                dx, dy = pos[tgt][0] - pos[sp][0], pos[tgt][1] - pos[sp][1]
+                length = math.hypot(dx, dy) or 1.0
+                nx_, ny_ = -dy / length, dx / length
+                mx += nx_ * rad * 0.65
+                my += ny_ * rad * 0.65
+            ax.text(mx, my, str(count), fontsize=10.5, fontweight="bold",
+                    color="#0f172a", ha="center", va="center", zorder=3.5,
+                    family="DejaVu Sans",
+                    bbox=dict(boxstyle="circle,pad=0.22",
+                              facecolor="white", edgecolor=col,
+                              linewidth=1.4, alpha=0.98))
 
-    # halo от betweenness — выделяет "брокеров" (Burt 2005)
-    bmax = max(betweenness.values()) if betweenness else 0.0
+    # === Узлы: цветная заливка, тёмная обводка, белая внешняя «галя» ===
     for a in agents:
         if a not in pos:
             continue
         x, y = pos[a]
-        r = node_radius(node_stats[a]["talks"])
-        if bmax > 0:
-            b = betweenness.get(a, 0.0)
-            if b > 0:
-                halo_r = r + 0.04 + 0.10 * (b / bmax)
-                halo = Circle((x, y), halo_r, color="#fbbf24", alpha=0.18, zorder=2.5)
-                ax.add_patch(halo)
-
-    # тени узлов
-    for a in agents:
-        if a not in pos:
-            continue
-        x, y = pos[a]
-        r = node_radius(node_stats[a]["talks"])
-        shadow = Circle((x + 0.015, y - 0.018), r * 1.02, color="#000000",
-                        alpha=0.18, zorder=3)
-        ax.add_patch(shadow)
-
-    # сами узлы + обводка по эмоции
-    for a in agents:
-        if a not in pos:
-            continue
-        x, y = pos[a]
-        r = node_radius(node_stats[a]["talks"])
+        r = radii[a]
         col = agents_meta[a].get("color", "#6366f1")
-        emo_col = _emotion_color(node_stats[a]["emotion"])
-        # внешняя обводка эмоции
-        outer = Circle((x, y), r, color=emo_col, zorder=4)
-        ax.add_patch(outer)
-        # заливка узла
-        inner = Circle((x, y), r * 0.86, color=col, zorder=5)
-        ax.add_patch(inner)
-        # лёгкий glare сверху-слева → объём
-        glare = Circle((x - r * 0.25, y + r * 0.25), r * 0.32,
-                       color="#ffffff", alpha=0.30, zorder=6)
-        ax.add_patch(glare)
+        # Внешний белый ободок: визуально отделяет узел от рёбер при пересечении.
+        ax.add_patch(Circle((x, y), r + 0.020, color="white",
+                            zorder=4, ec="white", lw=0))
+        # Основной круг с тёмной обводкой.
+        ax.add_patch(Circle((x, y), r, color=col, zorder=5,
+                            ec="#0f172a", lw=1.6))
 
-    # ПОДПИСИ узлов — снаружи, без перекрытия
+    # === Подписи: снаружи каждого узла, в белой пилюле, никогда не накладываются ===
     for a in agents:
         if a not in pos:
             continue
         x, y = pos[a]
-        r = node_radius(node_stats[a]["talks"])
-        # позиция подписи: радиально от центра
+        r = radii[a]
         theta = math.atan2(y, x) if (x != 0 or y != 0) else math.pi / 2
-        tx = x + (r + 0.08) * math.cos(theta)
-        ty = y + (r + 0.08) * math.sin(theta)
-        ha = "left" if math.cos(theta) > 0.1 else ("right" if math.cos(theta) < -0.1 else "center")
-        va = "bottom" if math.sin(theta) > 0.1 else ("top" if math.sin(theta) < -0.1 else "center")
+        # Отступ подписи: радиус + заметный воздух, чтобы пилюля не касалась круга.
+        offset = r + 0.18
+        tx = x + offset * math.cos(theta)
+        ty = y + offset * math.sin(theta)
+        ha = "left" if math.cos(theta) > 0.15 else ("right" if math.cos(theta) < -0.15 else "center")
+        va = "bottom" if math.sin(theta) > 0.15 else ("top" if math.sin(theta) < -0.15 else "center")
         ns = node_stats[a]
-        text = f"{a}\n{ns['talks']} реп · ↗{ns['out']} ↙{ns['in']}"
-        t = ax.text(tx, ty, text, fontsize=11, fontweight="bold",
-                    color=C_AXIS, ha=ha, va=va, zorder=10,
-                    family="DejaVu Sans")
-        t.set_path_effects([path_effects.withStroke(linewidth=3, foreground="white")])
+        label = f"{a}\n{ns['talks']} реп  ↗{ns['out']}  ↙{ns['in']}"
+        ax.text(tx, ty, label, fontsize=13, fontweight="bold",
+                color="#0f172a", ha=ha, va=va, zorder=10,
+                family="DejaVu Sans", linespacing=1.3,
+                bbox=dict(boxstyle="round,pad=0.36",
+                          facecolor="white", edgecolor="#cbd5e1",
+                          linewidth=1.0, alpha=0.96))
 
-    # сетевые метрики — компактный блок в левом нижнем углу,
-    # чтобы не перекрывать узлы вверху графа
+    # === Блок сетевых метрик: верхний правый угол, не пересекается с подписями ===
     metrics_text = _format_network_metrics(G, node_stats, edge_stats)
-    ax.text(0.015, 0.015, metrics_text, transform=ax.transAxes,
-            fontsize=9, family="DejaVu Sans Mono",
-            verticalalignment="bottom", horizontalalignment="left",
-            bbox=dict(boxstyle="round,pad=0.5",
+    ax.text(0.985, 0.985, metrics_text, transform=ax.transAxes,
+            fontsize=10, family="DejaVu Sans Mono",
+            verticalalignment="top", horizontalalignment="right",
+            bbox=dict(boxstyle="round,pad=0.65",
                       facecolor="white", edgecolor="#cbd5e1",
-                      linewidth=0.8, alpha=0.95),
+                      linewidth=1.0, alpha=0.97),
             zorder=20)
 
 
@@ -343,8 +364,8 @@ def _draw_centrality_panel(ax, agents, node_stats, betweenness, agents_meta):
     for spine in ("left", "bottom"):
         ax.spines[spine].set_color("#cbd5e1")
 
-    # Легенда — снизу под xlabel, чтобы не перекрывать ни бары, ни заголовок
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.10),
+    # Легенда — снизу под xlabel, дальше отнесена, чтобы не наезжать на бары.
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.22),
               ncol=3, fontsize=9, frameon=False, handlelength=1.4,
               columnspacing=1.6, handletextpad=0.5)
 
@@ -563,55 +584,59 @@ def draw_interactions_pro(
     # 4-строчный grid: главная сеть (2 строки) + sociomatrix/trend (1 строка) + timeline (1 строка).
     # hspace/wspace и поля подобраны так, чтобы заголовки панелей, подписи осей
     # и легенды не накладывались друг на друга, но при этом не оставалось зияющих пустот.
+    # Компоновка: главный граф доминирует слева (≈65% ширины),
+    # справа компактным столбиком — центральности и социограмма.
+    # Внизу — тонкая лента хронологии ходов.
     gs = gridspec.GridSpec(
-        4, 2,
-        width_ratios=[1.22, 1.0],
-        height_ratios=[1.8, 1.8, 1.2, 0.9],
-        hspace=0.65, wspace=0.28,
-        left=0.05, right=0.98, top=0.90, bottom=0.10,
+        2, 2,
+        width_ratios=[1.85, 1.0],
+        height_ratios=[3.4, 0.7],
+        hspace=0.35, wspace=0.18,
+        left=0.04, right=0.985, top=0.89, bottom=0.10,
         figure=fig,
     )
-    # главный граф — 2 строки слева
-    ax_net = fig.add_subplot(gs[0:2, 0])
-    # центральности — 2 строки справа
-    ax_cent = fig.add_subplot(gs[0:2, 1])
-    # средняя строка: sociomatrix слева, trend справа
-    ax_socio = fig.add_subplot(gs[2, 0])
-    ax_trend = fig.add_subplot(gs[2, 1])
-    # нижняя строка во всю ширину: turn timeline
-    ax_time = fig.add_subplot(gs[3, :])
+    # главный граф — большой блок слева
+    ax_net = fig.add_subplot(gs[0, 0])
+    # правый столбец: центральности сверху, sociomatrix снизу — через под-grid
+    right_gs = gridspec.GridSpecFromSubplotSpec(
+        2, 1, subplot_spec=gs[0, 1],
+        height_ratios=[1.0, 1.0], hspace=0.45,
+    )
+    ax_cent = fig.add_subplot(right_gs[0, 0])
+    ax_socio = fig.add_subplot(right_gs[1, 0])
+    # хронология ходов — тонкая полоса внизу на всю ширину
+    ax_time = fig.add_subplot(gs[1, :])
 
-    # --- Заголовок и сабтайтл (без даты/таймстампа)
-    fig.text(0.06, 0.955, title, fontsize=26, fontweight="700",
+    # --- Заголовок и подзаголовок ---
+    fig.text(0.04, 0.955, title, fontsize=28, fontweight="700",
              color="#0f172a", family="DejaVu Sans")
     subtitle = (
-        f"Анализ многоагентной диалоговой сети  ·  N={len(agents)} агент(ов)  ·  "
-        f"{total_msg} сообщений  ·  окно={window}"
+        f"N={len(agents)} агентов  ·  {total_msg} сообщений  ·  "
+        f"окно анализа = {window} ходов"
     )
-    fig.text(0.06, 0.928, subtitle, fontsize=13, color="#64748b",
-             family="DejaVu Sans", style="italic")
+    fig.text(0.04, 0.925, subtitle, fontsize=13.5, color="#64748b",
+             family="DejaVu Sans")
 
-    # --- Панели
+    # --- Панели ---
     _draw_main_network(ax_net, G, pos, agents, node_stats, edge_stats,
-                        agents_meta, history, window, betweenness, max_msg)
+                       agents_meta, history, window, betweenness, max_msg)
     _draw_centrality_panel(ax_cent, agents, node_stats, betweenness, agents_meta)
     _draw_sociomatrix(ax_socio, agents, edge_stats)
-    _draw_tone_trend(ax_trend, history)
     _draw_turn_timeline(ax_time, agents, history)
 
-    # --- Глобальная легенда тонов внизу
+    # --- Глобальная легенда — компактно внизу ---
     legend_handles = [
-        Line2D([0], [0], color=C_NEG, lw=3.5, label="негативный тон"),
-        Line2D([0], [0], color=C_NEU, lw=3.5, label="нейтральный"),
-        Line2D([0], [0], color=C_POS, lw=3.5, label="позитивный"),
-        Patch(facecolor="white", edgecolor="#0f172a", lw=2,
-              label="обводка узла — последняя эмоция"),
-        Patch(facecolor="#fbbf24", alpha=0.4, edgecolor="none",
-              label="halo узла — посредничество (betweenness)"),
+        Line2D([0], [0], color=C_POS, lw=4, label="позитивный тон"),
+        Line2D([0], [0], color=C_NEU, lw=4, label="нейтральный"),
+        Line2D([0], [0], color=C_NEG, lw=4, label="негативный"),
+        Patch(facecolor="white", edgecolor="#0f172a", lw=1.5,
+              label="число в кружке = сообщений по ребру"),
+        Patch(facecolor="#94a3b8", edgecolor="#0f172a", lw=1,
+              label="размер узла ∝ числу реплик агента"),
     ]
     fig.legend(handles=legend_handles, loc="lower center",
-               ncol=5, fontsize=9, frameon=False,
-               bbox_to_anchor=(0.5, 0.018))
+               ncol=5, fontsize=10.5, frameon=False,
+               bbox_to_anchor=(0.5, 0.015))
 
     fig.savefig(out_path, dpi=160, facecolor=fig.get_facecolor(),
                 bbox_inches=None, pad_inches=0.1)
