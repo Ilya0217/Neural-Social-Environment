@@ -1,0 +1,126 @@
+@startuml AgentDialogueSimPresentation
+!theme plain
+
+' --- Стили: крупный шрифт + большие отступы для читаемости ---
+skinparam dpi 150
+skinparam defaultFontSize 18
+skinparam classFontSize 18
+skinparam classFontStyle bold
+skinparam classAttributeFontSize 16
+skinparam packageFontSize 22
+skinparam packageFontStyle bold
+skinparam noteFontSize 15
+
+skinparam nodesep 80
+skinparam ranksep 90
+skinparam padding 6
+skinparam roundcorner 12
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+
+skinparam classBackgroundColor #FAFAFA
+skinparam classBorderColor #4A6FA5
+skinparam classBorderThickness 1.4
+skinparam packageBackgroundColor #EEF2F7
+skinparam packageBorderColor #4A6FA5
+skinparam arrowColor #4A6FA5
+skinparam arrowThickness 1.3
+
+title <size:22><b>Архитектура системы симуляции многоагентных диалогов</b></size>
+
+package "Ядро" as core {
+    class Agent {
+        + name
+        + persona
+        + big_five
+        --
+        + system_prompt()
+    }
+
+    class DialogueManager {
+        + agents
+        + history
+        --
+        + step()
+        + run()
+    }
+
+    class AgentTurn {
+        + reply
+        + tone
+        + emotion
+        + target
+    }
+
+    class ObserverAgent {
+        + observe()
+    }
+}
+
+package "Валидация" as val {
+    abstract class BaseValidator {
+        + validate()
+    }
+
+    class ValidationPipeline {
+        + validators
+        --
+        + validate_turn()
+    }
+}
+
+package "Аналитика и наука" as ana {
+    class MetricsCalculator {
+        + compute_metrics()
+    }
+
+    class ScientificAnalyzer {
+        + analyze()
+    }
+
+    class HypothesisValidator {
+        + validate_hypothesis()
+    }
+
+    class CausalRunner {
+        + run_experiment()
+    }
+}
+
+package "Интерфейс и I/O" as io {
+    class WebApp {
+        + api_start()
+        + api_step()
+    }
+
+    class IOLogger {
+        + write_jsonl()
+        + write_markdown()
+    }
+}
+
+note right of BaseValidator
+  <b>Strategy Pattern</b>
+  Подклассы:
+  Grammatical, Language,
+  Logical, Toxicity,
+  Ethical, MoralSchema
+end note
+
+' --- Связи ---
+DialogueManager "1" *-- "*" Agent
+DialogueManager --> AgentTurn
+DialogueManager --> ValidationPipeline
+DialogueManager --> ObserverAgent
+ValidationPipeline *-- BaseValidator
+
+DialogueManager ..> MetricsCalculator
+DialogueManager ..> IOLogger
+ScientificAnalyzer ..> MetricsCalculator
+HypothesisValidator ..> ScientificAnalyzer
+CausalRunner ..> DialogueManager
+
+WebApp --> DialogueManager
+
+@enduml
