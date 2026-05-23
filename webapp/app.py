@@ -430,6 +430,13 @@ class AppState:
 STATE = AppState()
 
 
+@app.route("/api/health")
+def api_health():
+    # Лёгкий liveness-probe для Docker HEALTHCHECK, nginx и CI smoke-теста.
+    # Не делаем сетевых вызовов и не трогаем глобальное состояние.
+    return jsonify({"ok": True, "service": "agent-dialogue-sim"})
+
+
 @app.route("/")
 def index():
     envs = list_env_contexts()

@@ -1,0 +1,4 @@
+inventory.ini
+.facts_cache/
+collections/
+*.retry

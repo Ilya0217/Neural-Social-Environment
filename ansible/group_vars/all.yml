@@ -1,0 +1,27 @@
+---
+# Общие переменные для всех окружений. Переопределение — через --extra-vars или
+# group_vars/<group>.yml (например, group_vars/prod.yml).
+
+# --- Размещение приложения на сервере ----------------------------------------
+deploy_user:  agent
+project_dir:  /opt/agent-dialogue
+repo_url:     https://github.com/Ilya0217/Neural-Social-Environment.git
+repo_branch:  main
+
+# --- Docker-образ приложения -------------------------------------------------
+image_repo:   ghcr.io/ilya0217/agent-dialogue-sim
+# image_tag по умолчанию latest; в CI передаётся через --extra-vars image_tag=<sha>
+image_tag:    latest
+
+# --- Let's Encrypt -----------------------------------------------------------
+le_email:    admin@agent-dialogue.ru
+le_domains:
+  - agent-dialogue.ru
+  - www.agent-dialogue.ru
+# Для отладки certbot (избежать боевого rate-limit) выставить true.
+le_staging:  false
+
+# --- Healthcheck для deploy.yml ----------------------------------------------
+healthcheck_url:    https://agent-dialogue.ru/api/health
+healthcheck_retries: 15
+healthcheck_delay:   3

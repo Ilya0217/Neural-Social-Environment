@@ -61,12 +61,8 @@ core/
   prompts.py
   validators.py
 docs/
-  26-april.md
-  preregistration.md
   PROJECT_RESULTS.md
   ИНСТРУКЦИЯ_ДЛЯ_РУКОВОДИТЕЛЯ.md
-  КУРСОВАЯ_ЗАДАНИЕ.md
-  РЕЦЕНЗИЯ.md
 experiments/
   configs/
     h1_extraversion.yaml
@@ -117,6 +113,7 @@ tests/
 uml_diagrams/
   agent_dialogue_sim_compact.puml
   agent_dialogue_sim_final.puml
+  agent_dialogue_sim_presentation.puml
   agent_dialogue_sim_simple.puml
   agent_dialogue_sim.puml
   architecture_diagram.puml
@@ -3812,134 +3809,155 @@ def compute_stats(agents_meta: Dict[str, Dict[str, str]],
 def _draw_main_network(ax, G, pos, agents, node_stats, edge_stats,
                        agents_meta, history, window, betweenness,
                        max_messages):
-    """Главная панель: force-directed network с глубиной."""
-    ax.set_facecolor(C_PANEL_BG)
-    ax.set_xlim(-1.45, 1.45)
-    ax.set_ylim(-1.45, 1.45)
+    """Главная панель: чистая направленная сеть.
+
+    Принципы качественной визуализации:
+      • круговая раскладка для N ≤ 10 → узлы равномерно по кругу, без наложений;
+      • узлы заметно меньше доступного пространства → много «воздуха»;
+      • одно ребро на пару (sender→target), агрегированное;
+      • реципрокные пары разводятся симметричными дугами в противоположные стороны;
+      • крупные явные стрелки (head_length/head_width в явных точках);
+      • shrinkA/shrinkB точно подогнаны под радиус узла → стрелка касается границы;
+      • подписи в белых пилюлях, радиально снаружи от каждого узла.
+    """
+    ax.set_facecolor("#ffffff")
+    # Чуть больший диапазон — нужен запас на подписи снаружи круга.
+    ax.set_xlim(-1.95, 1.95)
+    ax.set_ylim(-1.95, 1.95)
     ax.set_aspect("equal")
     ax.axis("off")
 
-    # Лёгкий "холст" — научная сетка как полярные направляющие
-    for r in (0.5, 1.0, 1.35):
-        circ = Circle((0, 0), r, fill=False, ec=C_GRID, lw=0.6, ls="--", alpha=0.7, zorder=0)
-        ax.add_patch(circ)
-    ax.plot([-1.4, 1.4], [0, 0], color=C_GRID, lw=0.5, alpha=0.5, zorder=0)
-    ax.plot([0, 0], [-1.4, 1.4], color=C_GRID, lw=0.5, alpha=0.5, zorder=0)
+    # === Раскладка: круговая для малых графов (гарантированно без наложений) ===
+    n_agents = len(agents)
+    if n_agents <= 10:
+        pos = nx.circular_layout(G, scale=1.25)
+    # Для очень больших графов оставляем kamada_kawai (передан извне),
+    # просто масштабируем положения наружу.
+    else:
+        pos = {a: (p[0] * 1.35, p[1] * 1.35) for a, p in pos.items()}
 
-    # --- РЁБРА: каждое сообщение из окна = отдельная стрелка с тоновым цветом ---
-    recent = history[-window:] if window > 0 else list(history)
-    # сгруппируем индексы по парам — нужно для разнесения стрелок (arc radius)
-    arc_seen: Dict[Tuple[str, str], int] = {}
-    for rec in recent:
-        sp, tgt = rec["speaker"], rec.get("target")
-        if not tgt or sp not in pos or tgt not in pos:
-            continue
-        tone = (rec.get("tone") or "neutral").lower()
-        col = tone_to_color(TONE_SCORE.get(tone, 0.0))
-        k = (sp, tgt)
-        arc_seen[k] = arc_seen.get(k, 0) + 1
-        # параллельные стрелки разносим небольшими дугами
-        rad = 0.05 + 0.05 * ((arc_seen[k] - 1) % 5)
-        # обратная пара — заметная дуга
-        if (tgt, sp) in arc_seen and arc_seen.get((tgt, sp), 0) > 0:
-            rad += 0.12
-
-        # тень рёбер для эффекта глубины
-        shadow = FancyArrowPatch(
-            pos[sp], pos[tgt],
-            connectionstyle=f"arc3,rad={rad}",
-            arrowstyle="-|>", mutation_scale=18,
-            linewidth=4.5, color="#000000", alpha=0.06,
-            zorder=1.5, shrinkA=20, shrinkB=22,
+    # === Радиусы узлов: умеренные, чтобы не «съесть» пространство ===
+    R_MIN, R_MAX = 0.11, 0.18
+    def node_radius(talks):
+        return R_MIN + (R_MAX - R_MIN) * (
+            math.log1p(talks) / math.log1p(max(max_messages, 1))
         )
-        ax.add_patch(shadow)
 
+    radii = {a: node_radius(node_stats[a]["talks"]) for a in agents if a in pos}
+
+    # === Сколько display-points занимает 1 axis-unit (для shrinkA/shrinkB) ===
+    # Аппроксимация: получается из размера панели. Берём bbox оси в дюймах.
+    bbox = ax.get_window_extent().transformed(ax.figure.dpi_scale_trans.inverted())
+    panel_width_in = max(bbox.width, 0.1)
+    axis_span = 3.9  # xlim from -1.95 to 1.95
+    points_per_axis_unit = (panel_width_in / axis_span) * 72.0
+
+    def _shrink(node_a: str) -> float:
+        r = radii.get(node_a, R_MIN)
+        # +5 точек — небольшой зазор между стрелкой и краем узла.
+        return r * points_per_axis_unit + 5.0
+
+    # === Рёбра: агрегированные, цвет=тон, толщина=log(count) ===
+    if edge_stats:
+        max_count = max(st["count"] for st in edge_stats.values()) or 1
+    else:
+        max_count = 1
+
+    def _edge_width(count: int) -> float:
+        # от 2.2 (для 1 сообщения) до 5.5 (для max)
+        return 2.2 + 3.3 * (math.log1p(count) / math.log1p(max_count))
+
+    for (sp, tgt), st in edge_stats.items():
+        if sp not in pos or tgt not in pos:
+            continue
+        count = st["count"]
+        if count <= 0:
+            continue
+
+        # Реципрокные пары: оба ребра дугами в противоположные стороны.
+        reciprocal = (tgt, sp) in edge_stats and edge_stats[(tgt, sp)]["count"] > 0
+        rad = 0.20 if reciprocal else 0.0
+        col = tone_to_color(st["avg_score"])
+        width = _edge_width(count)
+
+        # Большие явные наконечники: head_length / head_width в точках.
         arrow = FancyArrowPatch(
             pos[sp], pos[tgt],
             connectionstyle=f"arc3,rad={rad}",
-            arrowstyle="-|>", mutation_scale=14,
-            linewidth=1.7, color=col, alpha=0.92,
-            zorder=2, shrinkA=18, shrinkB=20,
+            arrowstyle="-|>,head_length=14,head_width=10",
+            mutation_scale=1.0,
+            linewidth=width,
+            color=col,
+            alpha=0.95,
+            zorder=2,
+            shrinkA=_shrink(sp),
+            shrinkB=_shrink(tgt),
+            capstyle="round",
+            joinstyle="round",
         )
         ax.add_patch(arrow)
 
-    # --- УЗЛЫ с эффектом объёма ---
-    # размер: логарифмическая шкала (научный стандарт)
-    def node_radius(talks):
-        # talks 0..max → radius 0.10..0.20
-        return 0.10 + 0.10 * (math.log1p(talks) / math.log1p(max(max_messages, 1)))
+        # Бейдж с количеством сообщений (только если ≥2 — иначе шум).
+        if count >= 2:
+            mx, my = (pos[sp][0] + pos[tgt][0]) / 2, (pos[sp][1] + pos[tgt][1]) / 2
+            if rad != 0:
+                # Смещаем перпендикулярно по нормали к ребру для дуги.
+                dx, dy = pos[tgt][0] - pos[sp][0], pos[tgt][1] - pos[sp][1]
+                length = math.hypot(dx, dy) or 1.0
+                nx_, ny_ = -dy / length, dx / length
+                mx += nx_ * rad * 0.65
+                my += ny_ * rad * 0.65
+            ax.text(mx, my, str(count), fontsize=10.5, fontweight="bold",
+                    color="#0f172a", ha="center", va="center", zorder=3.5,
+                    family="DejaVu Sans",
+                    bbox=dict(boxstyle="circle,pad=0.22",
+                              facecolor="white", edgecolor=col,
+                              linewidth=1.4, alpha=0.98))
 
-    # halo от betweenness — выделяет "брокеров" (Burt 2005)
-    bmax = max(betweenness.values()) if betweenness else 0.0
+    # === Узлы: цветная заливка, тёмная обводка, белая внешняя «галя» ===
     for a in agents:
         if a not in pos:
             continue
         x, y = pos[a]
-        r = node_radius(node_stats[a]["talks"])
-        if bmax > 0:
-            b = betweenness.get(a, 0.0)
-            if b > 0:
-                halo_r = r + 0.04 + 0.10 * (b / bmax)
-                halo = Circle((x, y), halo_r, color="#fbbf24", alpha=0.18, zorder=2.5)
-                ax.add_patch(halo)
-
-    # тени узлов
-    for a in agents:
-        if a not in pos:
-            continue
-        x, y = pos[a]
-        r = node_radius(node_stats[a]["talks"])
-        shadow = Circle((x + 0.015, y - 0.018), r * 1.02, color="#000000",
-                        alpha=0.18, zorder=3)
-        ax.add_patch(shadow)
-
-    # сами узлы + обводка по эмоции
-    for a in agents:
-        if a not in pos:
-            continue
-        x, y = pos[a]
-        r = node_radius(node_stats[a]["talks"])
+        r = radii[a]
         col = agents_meta[a].get("color", "#6366f1")
-        emo_col = _emotion_color(node_stats[a]["emotion"])
-        # внешняя обводка эмоции
-        outer = Circle((x, y), r, color=emo_col, zorder=4)
-        ax.add_patch(outer)
-        # заливка узла
-        inner = Circle((x, y), r * 0.86, color=col, zorder=5)
-        ax.add_patch(inner)
-        # лёгкий glare сверху-слева → объём
-        glare = Circle((x - r * 0.25, y + r * 0.25), r * 0.32,
-                       color="#ffffff", alpha=0.30, zorder=6)
-        ax.add_patch(glare)
+        # Внешний белый ободок: визуально отделяет узел от рёбер при пересечении.
+        ax.add_patch(Circle((x, y), r + 0.020, color="white",
+                            zorder=4, ec="white", lw=0))
+        # Основной круг с тёмной обводкой.
+        ax.add_patch(Circle((x, y), r, color=col, zorder=5,
+                            ec="#0f172a", lw=1.6))
 
-    # ПОДПИСИ узлов — снаружи, без перекрытия
+    # === Подписи: снаружи каждого узла, в белой пилюле, никогда не накладываются ===
     for a in agents:
         if a not in pos:
             continue
         x, y = pos[a]
-        r = node_radius(node_stats[a]["talks"])
-        # позиция подписи: радиально от центра
+        r = radii[a]
         theta = math.atan2(y, x) if (x != 0 or y != 0) else math.pi / 2
-        tx = x + (r + 0.08) * math.cos(theta)
-        ty = y + (r + 0.08) * math.sin(theta)
-        ha = "left" if math.cos(theta) > 0.1 else ("right" if math.cos(theta) < -0.1 else "center")
-        va = "bottom" if math.sin(theta) > 0.1 else ("top" if math.sin(theta) < -0.1 else "center")
+        # Отступ подписи: радиус + заметный воздух, чтобы пилюля не касалась круга.
+        offset = r + 0.18
+        tx = x + offset * math.cos(theta)
+        ty = y + offset * math.sin(theta)
+        ha = "left" if math.cos(theta) > 0.15 else ("right" if math.cos(theta) < -0.15 else "center")
+        va = "bottom" if math.sin(theta) > 0.15 else ("top" if math.sin(theta) < -0.15 else "center")
         ns = node_stats[a]
-        text = f"{a}\n{ns['talks']} реп · ↗{ns['out']} ↙{ns['in']}"
-        t = ax.text(tx, ty, text, fontsize=11, fontweight="bold",
-                    color=C_AXIS, ha=ha, va=va, zorder=10,
-                    family="DejaVu Sans")
-        t.set_path_effects([path_effects.withStroke(linewidth=3, foreground="white")])
+        label = f"{a}\n{ns['talks']} реп  ↗{ns['out']}  ↙{ns['in']}"
+        ax.text(tx, ty, label, fontsize=13, fontweight="bold",
+                color="#0f172a", ha=ha, va=va, zorder=10,
+                family="DejaVu Sans", linespacing=1.3,
+                bbox=dict(boxstyle="round,pad=0.36",
+                          facecolor="white", edgecolor="#cbd5e1",
+                          linewidth=1.0, alpha=0.96))
 
-    # сетевые метрики — компактный блок в левом нижнем углу,
-    # чтобы не перекрывать узлы вверху графа
+    # === Блок сетевых метрик: верхний правый угол, не пересекается с подписями ===
     metrics_text = _format_network_metrics(G, node_stats, edge_stats)
-    ax.text(0.015, 0.015, metrics_text, transform=ax.transAxes,
-            fontsize=9, family="DejaVu Sans Mono",
-            verticalalignment="bottom", horizontalalignment="left",
-            bbox=dict(boxstyle="round,pad=0.5",
+    ax.text(0.985, 0.985, metrics_text, transform=ax.transAxes,
+            fontsize=10, family="DejaVu Sans Mono",
+            verticalalignment="top", horizontalalignment="right",
+            bbox=dict(boxstyle="round,pad=0.65",
                       facecolor="white", edgecolor="#cbd5e1",
-                      linewidth=0.8, alpha=0.95),
+                      linewidth=1.0, alpha=0.97),
             zorder=20)
 
 
@@ -4016,8 +4034,8 @@ def _draw_centrality_panel(ax, agents, node_stats, betweenness, agents_meta):
     for spine in ("left", "bottom"):
         ax.spines[spine].set_color("#cbd5e1")
 
-    # Легенда — снизу под xlabel, чтобы не перекрывать ни бары, ни заголовок
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.10),
+    # Легенда — снизу под xlabel, дальше отнесена, чтобы не наезжать на бары.
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.22),
               ncol=3, fontsize=9, frameon=False, handlelength=1.4,
               columnspacing=1.6, handletextpad=0.5)
 
@@ -4236,55 +4254,59 @@ def draw_interactions_pro(
     # 4-строчный grid: главная сеть (2 строки) + sociomatrix/trend (1 строка) + timeline (1 строка).
     # hspace/wspace и поля подобраны так, чтобы заголовки панелей, подписи осей
     # и легенды не накладывались друг на друга, но при этом не оставалось зияющих пустот.
+    # Компоновка: главный граф доминирует слева (≈65% ширины),
+    # справа компактным столбиком — центральности и социограмма.
+    # Внизу — тонкая лента хронологии ходов.
     gs = gridspec.GridSpec(
-        4, 2,
-        width_ratios=[1.22, 1.0],
-        height_ratios=[1.8, 1.8, 1.2, 0.9],
-        hspace=0.65, wspace=0.28,
-        left=0.05, right=0.98, top=0.90, bottom=0.10,
+        2, 2,
+        width_ratios=[1.85, 1.0],
+        height_ratios=[3.4, 0.7],
+        hspace=0.35, wspace=0.18,
+        left=0.04, right=0.985, top=0.89, bottom=0.10,
         figure=fig,
     )
-    # главный граф — 2 строки слева
-    ax_net = fig.add_subplot(gs[0:2, 0])
-    # центральности — 2 строки справа
-    ax_cent = fig.add_subplot(gs[0:2, 1])
-    # средняя строка: sociomatrix слева, trend справа
-    ax_socio = fig.add_subplot(gs[2, 0])
-    ax_trend = fig.add_subplot(gs[2, 1])
-    # нижняя строка во всю ширину: turn timeline
-    ax_time = fig.add_subplot(gs[3, :])
+    # главный граф — большой блок слева
+    ax_net = fig.add_subplot(gs[0, 0])
+    # правый столбец: центральности сверху, sociomatrix снизу — через под-grid
+    right_gs = gridspec.GridSpecFromSubplotSpec(
+        2, 1, subplot_spec=gs[0, 1],
+        height_ratios=[1.0, 1.0], hspace=0.45,
+    )
+    ax_cent = fig.add_subplot(right_gs[0, 0])
+    ax_socio = fig.add_subplot(right_gs[1, 0])
+    # хронология ходов — тонкая полоса внизу на всю ширину
+    ax_time = fig.add_subplot(gs[1, :])
 
-    # --- Заголовок и сабтайтл (без даты/таймстампа)
-    fig.text(0.06, 0.955, title, fontsize=26, fontweight="700",
+    # --- Заголовок и подзаголовок ---
+    fig.text(0.04, 0.955, title, fontsize=28, fontweight="700",
              color="#0f172a", family="DejaVu Sans")
     subtitle = (
-        f"Анализ многоагентной диалоговой сети  ·  N={len(agents)} агент(ов)  ·  "
-        f"{total_msg} сообщений  ·  окно={window}"
+        f"N={len(agents)} агентов  ·  {total_msg} сообщений  ·  "
+        f"окно анализа = {window} ходов"
     )
-    fig.text(0.06, 0.928, subtitle, fontsize=13, color="#64748b",
-             family="DejaVu Sans", style="italic")
+    fig.text(0.04, 0.925, subtitle, fontsize=13.5, color="#64748b",
+             family="DejaVu Sans")
 
-    # --- Панели
+    # --- Панели ---
     _draw_main_network(ax_net, G, pos, agents, node_stats, edge_stats,
-                        agents_meta, history, window, betweenness, max_msg)
+                       agents_meta, history, window, betweenness, max_msg)
     _draw_centrality_panel(ax_cent, agents, node_stats, betweenness, agents_meta)
     _draw_sociomatrix(ax_socio, agents, edge_stats)
-    _draw_tone_trend(ax_trend, history)
     _draw_turn_timeline(ax_time, agents, history)
 
-    # --- Глобальная легенда тонов внизу
+    # --- Глобальная легенда — компактно внизу ---
     legend_handles = [
-        Line2D([0], [0], color=C_NEG, lw=3.5, label="негативный тон"),
-        Line2D([0], [0], color=C_NEU, lw=3.5, label="нейтральный"),
-        Line2D([0], [0], color=C_POS, lw=3.5, label="позитивный"),
-        Patch(facecolor="white", edgecolor="#0f172a", lw=2,
-              label="обводка узла — последняя эмоция"),
-        Patch(facecolor="#fbbf24", alpha=0.4, edgecolor="none",
-              label="halo узла — посредничество (betweenness)"),
+        Line2D([0], [0], color=C_POS, lw=4, label="позитивный тон"),
+        Line2D([0], [0], color=C_NEU, lw=4, label="нейтральный"),
+        Line2D([0], [0], color=C_NEG, lw=4, label="негативный"),
+        Patch(facecolor="white", edgecolor="#0f172a", lw=1.5,
+              label="число в кружке = сообщений по ребру"),
+        Patch(facecolor="#94a3b8", edgecolor="#0f172a", lw=1,
+              label="размер узла ∝ числу реплик агента"),
     ]
     fig.legend(handles=legend_handles, loc="lower center",
-               ncol=5, fontsize=9, frameon=False,
-               bbox_to_anchor=(0.5, 0.018))
+               ncol=5, fontsize=10.5, frameon=False,
+               bbox_to_anchor=(0.5, 0.015))
 
     fig.savefig(out_path, dpi=160, facecolor=fig.get_facecolor(),
                 bbox_inches=None, pad_inches=0.1)
@@ -7340,769 +7362,6 @@ def validate_agent_turn(
     return is_valid, results, formatted
 </file>
 
-<file path="docs/26-april.md">
-# Отчёт о состоянии научной работы — 26 апреля 2026
-
-**Тема:** Разработка комплекса средств для использования больших языковых моделей в социальной сфере.
-
-**Объект:** Многоагентная диалоговая система на базе LLM, имитирующая социальное взаимодействие в малых группах с автоматической проверкой статистических гипотез.
-
-**Главный исследовательский вопрос (RQ-main):**
-> Способна ли многоагентная LLM-система при персонологической параметризации (Big Five) и многоуровневой валидации воспроизводить статистически значимые социально-психологические закономерности малых групп с эффектами размера ≥ medium (Cohen's d ≥ 0.5 / η² ≥ 0.06)?
-
----
-
-## 1. Теоретическая основа
-
-В работе используются 5 теорий социальной психологии и компьютерной лингвистики, на базе которых сформулированы 5 формальных статистических гипотез.
-
-### 1.1 Теория личности — Big Five / OCEAN
-- **Источник (современный):** Soto & John (2017) — BFI-2: иерархическая модель с 15 фасетами. *J. Personality and Social Psychology*, 113(1), 117–143.
-- **Связь личности с языком:** Park, Schwartz, Eichstaedt et al. (2015) — Automatic personality assessment through social media language. *J. Personality and Social Psychology*, 108(6), 934–952.
-- **Содержание:** пятифакторная модель личности (Openness, Conscientiousness, Extraversion, Agreeableness, Neuroticism). Каждый параметр ∈ [0, 1].
-- **Эмпирический факт:** экстраверты в речи продуцируют больше слов, более длинные реплики и больше упоминаний социальных контекстов; добросовестные — больше task-ориентированных актов (Park et al., 2015 — корпус ~700 тыс. сообщений 65 тыс. пользователей).
-- **Связана с:** **гипотезой H1**.
-
-### 1.2 Интегрированная модель развития группы — Wheelan (2016)
-- **Источник:** Wheelan, S. A. (2016). *Creating Effective Teams: A Guide for Members and Leaders* (5th ed.). SAGE Publications.
-- **Историко-методологический обзор:** Bonebright, D. A. (2010). 40 years of storming. *Human Resource Development International*, 13(1), 111–120.
-- **Содержание:** 4 стадии развития малой группы — **forming → storming → norming → performing**. Стадии диагностируются по соотношению категорий диалоговых актов (доля socio-emotional vs task; доля negative socio для storming; доля agreements для norming).
-- **Связана с:** **гипотезой H3**.
-
-### 1.3 Этика биомедицинских принципов — Beauchamp & Childress (2019)
-- **Источник:** Beauchamp, T. L., & Childress, J. F. (2019). *Principles of Biomedical Ethics* (8th ed.).
-- **Содержание:** 4 моральных принципа — fairness, autonomy, inclusivity, non-maleficence. Применяются для классификации речевых нарушений.
-- **Связана с:** **гипотезой H5** (эффективность многоуровневой валидации).
-
-### 1.4 Chain-of-Thought-промптинг — Wei et al. (2022)
-- **Источник:** Wei, J., et al. (2022). Chain-of-Thought Prompting Elicits Reasoning in Large Language Models. *NeurIPS*.
-- **Содержание:** структурирование промпта в виде шагов рассуждения улучшает качество ответов LLM на задачах, требующих многошагового вывода. В диалоговом контексте — должно повышать долю actionable-предложений.
-- **Связана с:** **гипотезой H6**.
-
-### 1.5 Турн-тейкинг и структура диалога — Levinson & Torreira (2015), Dunbar et al. (2015)
-- **Источник (современная модель турн-тейкинга):** Levinson, S. C., & Torreira, F. (2015). Timing in turn-taking and its implications for processing models of language. *Frontiers in Psychology*, 6, 731.
-- **Источник (распределение в малых группах онлайн/офлайн):** Dunbar, R. I. M., Arnaboldi, V., Conti, M., & Passarella, A. (2015). The structure of online social networks mirrors those in the offline world. *Social Networks*, 43, 39–47.
-- **Содержание:** структура турн-тейкинга в реальных малых группах характеризуется коэффициентом Джини в диапазоне [0.2, 0.45]. Если LLM-симуляция воспроизводит человекоподобный паттерн, её распределение Джини должно быть статистически эквивалентным человеческому корпусу.
-- **Связана с:** **гипотезой H7**.
-
-### 1.6 Вспомогательные таксономии и метрики
-- **ISO 24617-2** (Bunt et al., 2020) — таксономия диалоговых актов. Используется для классификации каждой реплики по 12 категориям (positive socio, negative socio, task questions, task answers).
-- **Cowen & Keltner (2017)** — высокоразмерная модель эмоций (27 категорий).
-- **Funder & Ozer (2019)**, **Lakens (2013)** — современные пороги и интерпретация размеров эффектов (small/medium/large) и практический расчёт Cohen's d, η², Cohen's w.
-- **McHugh (2012)** — современный гид по интерпретации κ Коэна для inter-rater reliability.
-- **Hain et al. (2012)** — описание актуальной версии AMI Meeting Corpus, используемой для H7.
-
----
-
-## 2. Гипотезы (математически строгая формулировка)
-
-Все гипотезы — в форме нулевой H₀ и альтернативной H₁ с указанием статистического критерия, уровня значимости α и минимального размера эффекта.
-
-### Сводная таблица
-
-| ID | RQ | Тест | α | Effect ≥ | План N |
-|---|---|---|---|---|---|
-| **H1** | Big Five влияет на длину реплики | ANOVA + Tukey HSD | 0.05 | η² ≥ 0.06 | 480 диалогов (160/группа × 3) |
-| **H3** | Группа проходит стадии Wheelan | χ² goodness-of-fit + Cox–Stuart | 0.01 | w ≥ 0.3 + положительный тренд | 30 диалогов × 60 ходов |
-| **H5** | Валидация снижает токсичность | z-test двух пропорций (1-side) | 0.01 | Δp ≥ 0.05 | 60 диалогов (30/группа) |
-| **H6** | CoT повышает actionability | Welch t-test (1-side) | 0.05 | d ≥ 0.5 | 110 диалогов (55/группа) |
-| **H7** | LLM-Gini ≈ human-Gini | TOST (Mann–Whitney) | 0.05 | \|Δmedian\| ≤ 0.1 | 70 LLM + 70 human |
-
-### H1. Влияние экстраверсии на длину реплики
-
-- **H₀:** μ_low = μ_mid = μ_high (средняя длина реплики не зависит от уровня экстраверсии).
-- **H₁:** ∃ i, j: μ_i ≠ μ_j.
-- **IV:** Big Five `extraversion` ∈ {low=0.2, mid=0.5, high=0.8}; остальные OCEAN зафиксированы на 0.5.
-- **DV:** средняя длина реплики агента в словах за диалог (`avg_reply_length`).
-- **Решающее правило:** reject H₀ если **p < 0.05 И η² ≥ 0.06**.
-
-### H3. Воспроизведение стадий Wheelan
-
-- **H₀:** последовательность стадий случайна (равномерная марковская цепь, каждый переход p = 1/4).
-- **H₁:** наблюдаемая матрица переходов P_obs ≠ P_uniform.
-- **Дополнительно:** тест Кокса–Стюарта проверяет монотонный тренд forming → performing.
-- **Решающее правило:** reject H₀ если **χ² p < 0.01 И w ≥ 0.3 И Cox–Stuart p < 0.05**.
-
-### H5. Эффективность валидации
-
-- **H₀:** p_A = p_B (доля токсичных реплик одинакова с/без валидации).
-- **H₁:** p_A < p_B (валидация уменьшает долю).
-- **A/B:** treatment = `enable_validation=True`, control = `False`.
-- **Inter-rater reliability:** для разметки токсичности требуется κ Коэна ≥ 0.7 (LLM-судья + ручная подвыборка ≥ 100 реплик).
-- **Решающее правило:** reject H₀ если **p < 0.01 И \|Δp\| ≥ 0.05**.
-
-### H6. Эффективность Chain-of-Thought
-
-- **H₀:** μ_A = μ_B (actionability_rate одинаков с CoT и без).
-- **H₁:** μ_A > μ_B (CoT улучшает).
-- **A/B:** treatment = `enable_cot=True`, control = базовый промпт.
-- **DV:** `actionability_rate` диалога — доля реплик, содержащих action-маркеры (модальные глаголы should/could/let's, императивы, конкретные шаги). Реализована в `analytics.py:actionability_rate`.
-- **Решающее правило:** reject H₀ если **p < 0.05 И d ≥ 0.5**.
-
-### H7. Эквивалентность турн-тейкинга человеческому
-
-- **H₀_TOST:** медианная разность Gini-LLM vs Gini-human лежит вне [-0.1, +0.1] — распределения практически отличаются.
-- **H₁_TOST:** \|Δmedian\| < 0.1 — распределения эквивалентны.
-- **Источник эталона:** AMI Meeting Corpus (актуальная версия описана в Hain et al., 2012, *IEEE Trans. ASLP*, 20(2), 486–503), 100 часов записанных совещаний по 4 человека с разметкой говорящих.
-- **Решающее правило:** TOST — оба односторонних теста должны дать p < 0.05 для подтверждения эквивалентности.
-
----
-
-## 3. План выборок и обоснование (Power Analysis)
-
-Размеры выборок определены формальным power-анализом с использованием `power_analysis.py`. Целевая мощность **1−β = 0.80**, ожидаемый эффект — **medium** (d=0.5, η²=0.06, w=0.3).
-
-| Гипотеза | Тест | Plan N | Required N | Статус |
-|---|---|---|---|---|
-| H1 | ANOVA, k=3 | 160/группа | 158/группа | ✅ |
-| H3 | χ² (4×4 матрица) | ≈300 transitions | 283 | ✅ |
-| H5 | z-test 2 prop (1-side) | 900 реплик/группа | 180 | ✅ |
-| H6 | Welch t (1-side) | 55/группа | 51 | ✅ |
-| H7 | TOST (MWU, ARE-coorr) | 70/группа | 66 | ✅ |
-
-**Sensitivity (для t-test, α=0.05, power=0.80):**
-
-| Cohen d | Required N per group |
-|---|---|
-| 0.2 (small) | 310 |
-| 0.3 | 139 |
-| 0.4 | 78 |
-| **0.5 (medium)** | **51** |
-| 0.6 | 36 |
-| 0.7 | 26 |
-| 0.8 (large) | 21 |
-| 1.0 | 14 |
-
-### Поправка на множественные сравнения
-
-Тестируется семейство из 5 гипотез. Применяется **Holm–Bonferroni**:
-- p-values сортируются по возрастанию: p₍₁₎ ≤ p₍₂₎ ≤ ... ≤ p₍₅₎.
-- H_(i) отвергается, если p₍ᵢ₎ < α / (K − i + 1), K = 5.
-- Реализация: `statistical_tests.holm_bonferroni()`.
-
----
-
-## 4. Конфигурация агентов
-
-### 4.1 Базовая модель агента
-
-```python
-@dataclass
-class Agent:
-    name: str
-    nature: str      # роль: explorer / critic / facilitator / analyst / innovator
-    color: str       # цвет для визуализации
-    persona: str = ""
-    big_five: Optional[BigFiveProfile] = None
-```
-
-`BigFiveProfile` содержит 5 параметров OCEAN ∈ [0, 1]; преобразуется в текстовое описание через `to_prompt_description()` и инжектируется в системный промпт.
-
-### 4.2 Состав группы
-
-- **Размер:** 3 агента по умолчанию (соответствует диапазону "малой группы").
-- **Роли:** `explorer`, `critic`, `facilitator` — три комплементарные роли с разными OCEAN-преcetами.
-- **Гендерная нейтральность:** все имена (Alex, Jordan, Sam) — gender-neutral.
-
-### 4.3 OCEAN-пресеты по умолчанию
-
-| Роль | O | C | E | A | N |
-|---|---|---|---|---|---|
-| explorer | 0.9 | 0.4 | 0.7 | 0.6 | 0.3 |
-| critic   | 0.5 | 0.8 | 0.4 | 0.3 | 0.5 |
-| facilitator | 0.6 | 0.7 | 0.8 | 0.9 | 0.2 |
-| analyst | 0.6 | 0.9 | 0.3 | 0.4 | 0.5 |
-| innovator | 0.95 | 0.3 | 0.8 | 0.5 | 0.4 |
-
-### 4.4 Манипулируемые конфигурации (для гипотез)
-
-| Гипотеза | Override |
-|---|---|
-| H1 (low/mid/high extraversion) | OCEAN: всем агентам экстраверсия = {0.2, 0.5, 0.8}; остальные = 0.5 |
-| H3 (стадии Wheelan) | OCEAN рандомизированы с фиксированным seed |
-| H5 (validation on/off) | DialogueManager.enable_validation = {True, False} |
-| H6 (CoT on/off) | DialogueManager.enable_cot = {True, False} |
-| H7 (turn-taking) | OCEAN рандомизированы; темы из единого набора 5 шт. |
-
-### 4.5 Системный промпт агента
-
-Собирается в `agents.py:Agent.system_prompt` через `build_system_prompt(nature, persona)` с инъекцией:
-- базовой роли (explorer/critic/facilitator)
-- персоны (возраст, профессия, бэкграунд)
-- блока OCEAN с числовыми значениями + текстовым описанием
-- инструкции "embody don't announce"
-
-При активации CoT-режима через `DialogueManager.enable_cot=True` добавляется блок:
-
-```
-REASONING PROTOCOL (think step by step, internally, BEFORE you reply):
-1. Identify the most important point or open question in the latest message.
-2. Decide what is missing: a concrete next step, a constraint, an example,
-   a risk, a counter-argument, or an assignment of responsibility.
-3. Compose a reply that adds exactly that missing piece — do not just acknowledge.
-Do not output the reasoning steps themselves — only the final reply.
-```
-
-### 4.6 Параметры LLM (фиксированы)
-
-| Параметр | Значение |
-|---|---|
-| Модель | `openai/gpt-4o-mini` через OpenRouter |
-| Temperature | 0.55 (после смены с 0.7 — для большей когерентности) |
-| Max tokens | 220 |
-| Структурированный вывод | OpenAI function calling (tool=`submit_agent_turn`); fallback на JSON mode |
-| Random seed | базовый seed эксперимента + индекс диалога |
-
----
-
-## 5. Архитектура программного комплекса
-
-### 5.1 Ключевые модули
-
-| Модуль | Назначение | Строк |
-|---|---|---|
-| `agents.py` | Agent + BigFiveProfile + 8 OCEAN-пресетов | 159 |
-| `prompts.py` | Базовые системные промпты ролей | ~140 |
-| `profiles.py` | Опросник из 14 вопросов для генерации persona | ~340 |
-| `dialogue_manager.py` | Оркестратор диалога: выбор говорящего, сборка контекста, вызов LLM, валидация, mood-decay | ~1100 |
-| `validators.py` | 8 валидаторов: грамматика, логика, токсичность, моральные схемы | ~390 |
-| `analytics.py` | Базовые метрики (тон, энтропия, reciprocity, actionability_rate) | ~340 |
-| `scientific_analytics.py` | 8 фреймворков: SNA, Wheelan, ISO 24617-2, Cowen-Keltner, LSM, Herring, Mathieu | ~1100 |
-| `hypothesis_validator.py` | Эвристическая проверка гипотез (заменяется на p-value pipeline) | ~950 |
-| **`statistical_tests.py`** *(новый)* | Унифицированный API мат-стат тестов | 380 |
-| **`power_analysis.py`** *(новый)* | Расчёт минимального N для каждой гипотезы | 220 |
-| **`experiment_runner.py`** *(новый)* | Пакетный запуск через YAML; mock+real диспатчер; интеграция стат-тестов | 470 |
-| `web_app.py` | Flask UI + API | ~570 |
-| `main.py` | CLI | ~120 |
-
-### 5.2 Pipeline эксперимента
-
-```
-YAML config
-    ↓
-ExperimentConfig.from_yaml()
-    ↓
-ExperimentRunner.run()
-    ↓
-для каждой "arm" (треатмент-группы):
-    ThreadPoolExecutor(parallelism=6):
-        для каждого диалога с фикс. seed:
-            real_dispatcher() →
-                OpenAI client (OpenRouter)
-                Agent ← OCEAN override из arm
-                DialogueManager(enable_cot=..., enable_validation=...)
-                for turn in range(n_turns):
-                    dm.step() → LLM call → validation → history.append
-                analytics.compute_metrics(history)
-                return DialogueResult dict
-        save arm_<name>.jsonl
-    ↓
-extract metric per dialogue → list[float] на arm
-    ↓
-statistical_tests.<test>(groups, **params) → TestResult
-    ↓
-save summary.json (config, metrics, p-value, effect, decision)
-```
-
-### 5.3 Юнит-тесты
-
-- `test_statistical_tests.py` — **25/25 PASS**: для каждой стат-функции — кейс TRUE_H1 (синтетика с эффектом, должны reject H₀) и кейс NULL_H0 (без эффекта, должны fail_to_reject).
-- `test_experiment_runner.py` — **10/10 PASS**: загрузка YAML, mock-диспатчер, детерминизм seeds, корректность сохранения arm_*.jsonl и summary.json.
-
-**Итого: 35/35 unit-тестов проходят.**
-
----
-
-## 6. Запущенные эксперименты
-
-### 6.1 Smoke-test интеграции (валидация pipeline на реальной LLM)
-
-| Параметр | Значение |
-|---|---|
-| Конфиг | `experiments/configs/smoke_test.yaml` |
-| Гипотеза | H6 (CoT vs baseline) — но N=2 заведомо мало |
-| Цель | проверить, что real_dispatcher работает end-to-end |
-| Размер | 2 arm × 2 диалога × 4 хода = **16 LLM-вызовов** |
-| Время | 19.5 секунд |
-| Стоимость | ~$0.002 |
-| Результат | ✅ pipeline работает: метрики собраны, тест применён, файлы сохранены |
-| Найденные баги | 1) ключи метрик были вложены в `summary.all` (исправлено); 2) `ScientificAnalysisResult` не сериализовался в JSON (добавлен `_json_default` fallback) |
-
-**Конкретные значения метрик в smoke-test:**
-| seed | arm | reply_len | actionability | reciprocity |
-|---|---|---|---|---|
-| 99000 | cot_on | 32.0 | 0.000 | 0.500 |
-| 99001 | cot_on | 32.5 | 0.250 | 0.500 |
-| 99100 | baseline | 34.5 | 0.000 | 0.500 |
-| 99101 | baseline | 33.2 | 0.000 | 0.500 |
-
-Среднее actionability: cot_on = 0.125, baseline = 0.000. Направление эффекта совпадает с гипотезой H₁, но N=2 на arm не позволяет принять решение.
-
-### 6.2 Эксперимент H6 — основной прогон (запущен)
-
-| Параметр | Значение |
-|---|---|
-| Конфиг | `experiments/configs/h6_cot.yaml` |
-| Гипотеза | H6: CoT улучшает actionability_rate |
-| arm A (treatment) | `enable_cot=True`, 55 диалогов, seeds 6000–6054 |
-| arm B (control) | `enable_cot=False`, 55 диалогов, seeds 6100–6154 |
-| Длина диалога | 20 ходов |
-| Группа | 3 агента: Explorer / Critic / Facilitator с базовыми OCEAN-пресетами |
-| Тест | Welch t-test (односторонний `greater`), α = 0.05, d_threshold = 0.5 |
-| Метрика | `actionability_rate` (доля реплик с action-маркерами) |
-| Параллелизм | 6 потоков |
-| Ожидаемая длительность | ~10 минут |
-| Ожидаемая стоимость | $0.5–0.7 |
-
-### Результаты прогона H6 (2026-04-26)
-
-⚠ **Прогон ЗАВЕРШИЛСЯ ТЕХНИЧЕСКИ, НО НАУЧНО НЕ ВАЛИДЕН.**
-
-#### Что произошло
-Через несколько минут после старта OpenRouter API начал возвращать **HTTP 402 "Insufficient credits"** — баланс ключа исчерпался по ходу прогона. Pipeline продолжил работу, но `DialogueManager` подменял ответы fallback-строкой `"I'm here, but I'm having trouble responding right now..."` и возвращал её как реплику агента.
-
-#### Распределение реальных vs fallback-реплик
-
-| arm | real replies | fallback replies | % real |
-|---|---|---|---|
-| cot_on | 467 | 633 | 42.5% |
-| baseline | **0** | 1100 | **0.0%** |
-| **Итого** | 467 | 1733 | 21.2% |
-
-| arm | диалоги ≥1 реальной реплики | всего диалогов |
-|---|---|---|
-| cot_on | 24 | 55 |
-| baseline | **0** | 55 |
-
-К моменту запуска arm `baseline` все кредиты OpenRouter были исчерпаны → ни одного реального LLM-ответа в контрольной группе.
-
-#### Технический результат теста (артефактный)
-
-| Параметр | Значение |
-|---|---|
-| Welch t-test statistic | 4.39 |
-| p-value | 2.65 × 10⁻⁵ |
-| Cohen's d | 0.84 |
-| Decision | REJECT_H0 |
-| Длительность | 449.5 секунд |
-
-**Этот результат необходимо отвергнуть.** Тест обнаружил различие между "смесью настоящих и заглушечных реплик" в treatment vs "только заглушечные реплики" в control. Это **не CoT-эффект**, а артефакт fallback-механизма + обрыва кредитов на середине прогона.
-
-#### План восстановления
-
-1. **Пополнить баланс OpenRouter** — оценочная стоимость на полный прогон H6 при `gpt-4o-mini`: ~$1 (с запасом).
-2. **Параллельно — отключить или сделать видимым fallback-механизм** в `DialogueManager`: при текущей реализации he silently produces nonsensical metric data при API-сбое. Варианты:
-   - Жёстко падать (raise exception) при исчерпанных credits — диалог помечается как `"error": "..."` и не попадает в выборку (мягко обрабатывается уже в `experiment_runner.py:_run_arm`).
-   - Сохранять флаг `had_fallback: bool` в результате и фильтровать в `_extract_metric()` (методологически чище).
-3. **Re-run H6** после пополнения с проверкой `0 fallbacks` на короткой выборке (3–5 диалогов).
-4. **Smoke-test перед каждым большим прогоном** должен включать проверку *qualifying credits*: вызывать `/api/v1/auth/key` или иной эндпоинт OpenRouter для получения текущего баланса до запуска серии.
-
-#### Что мы всё-таки узнали (методологический урок)
-
-- Pipeline работает — exit code 0, файлы сохранены, тест применён, summary.json валиден.
-- Баг `DialogueManager`: тихая подмена реплики вместо явной ошибки — критическая проблема для научной воспроизводимости. Будет исправлена до следующего прогона.
-- Power-анализ был нужен (powerful test обнаружил даже артефактную разницу с p=2.6e-5).
-
-### 6.3 Будущие эксперименты
-
-| Гипотеза | Объём | Оценка стоимости | Готовность |
-|---|---|---|---|
-| H1 | 480 диалогов × 20 ходов | ~$2 | конфиг готов: `h1_extraversion.yaml` |
-| H5 | 60 диалогов × 30 ходов | ~$0.5 | конфиг готов: `h5_validation.yaml`; нужна разметка токсичности через LLM-судью |
-| H3 | 30 диалогов × 60 ходов | ~$1 | требует классификатора стадий Wheelan на окнах |
-| H7 | 70 LLM + 70 human (AMI) | ~$1 + парсинг AMI | требует подключения корпуса AMI Meeting |
-
----
-
-## 7. Решающие правила для финального вывода
-
-В терминологии научного руководителя:
-
-1. **Если p < α И размер эффекта ≥ minimum** → данные **не противоречат H₁** → гипотеза принимается как теория для класса систем "LLM-многоагентные диалоги".
-2. **Если p ≥ α** → нет оснований отвергнуть H₀; **H₁ не подтверждена** (но и не отвергнута окончательно — это важно для интерпретации).
-3. **Если p < α, но эффект мал** → описывается отдельно: "статистически значимо, но практически малый эффект".
-
-**Сценарии комплексного исхода всех 5 гипотез:**
-
-| Подтверждено | Интерпретация для главного RQ |
-|---|---|
-| 5/5 | Сильное свидетельство в пользу способности LLM воспроизводить социально-психологические закономерности |
-| 3–4/5 | Умеренное свидетельство; необходимо обсуждение специфики отвергнутых |
-| 1–2/5 | Слабое свидетельство; вывод — система воспроизводит лишь отдельные аспекты |
-| 0/5 | Гипотеза о валидности LLM-симуляции в текущей реализации **не подтверждается**; формулируются ограничения и перспективы |
-
----
-
-## 8. Этическая и репродуцируемая база
-
-- **Preregistration:** все гипотезы зафиксированы в `preregistration.md` ДО начала экспериментов; журнал изменений ведётся явно.
-- **Random seeds:** для каждого диалога — фиксированный детерминированный seed (`seed_base + arm.seed_offset + dialogue_index`).
-- **Открытые данные:** все артефакты эксперимента — YAML config, arm_*.jsonl, summary.json — сохраняются в `experiments/results/<exp_id>__<timestamp>/`.
-- **Inter-rater reliability:** для H5 — обязательная вторичная разметка ≥ 100 реплик с κ Коэна ≥ 0.7.
-- **Поправка на множественность:** Holm–Bonferroni применяется к семейству 5 гипотез.
-
----
-
-## 9. Что осталось на следующих этапах
-
-### Этап 3 (после H6)
-
-1. Прогоны H1, H5, H3, H7 в указанной последовательности.
-2. Замена эвристического `confidence` в `hypothesis_validator.py` на честный p-value через `statistical_tests.py`.
-3. Реализация классификатора стадий Wheelan на основе ISO 24617-2 для H3.
-4. Подключение корпуса AMI для H7 (парсер + расчёт Gini для human-baseline).
-5. Реализация LLM-судьи для разметки токсичности (H5) с κ ≥ 0.7.
-
-### Этап 4
-
-1. Финальный отчёт: таблица "гипотеза | n | критерий | статистика | p_raw | p_holm | эффект | вывод".
-2. Глава "Результаты и обсуждение" в дипломе.
-3. Глава "Ограничения" с честным обсуждением методологических компромиссов.
-4. Защита: презентация по структуре RQ → 5 гипотез → таблица результатов → выводы.
-
----
-
-## 10. Сводка ссылок
-
-Все источники — публикации 2010 года и новее.
-
-1. Beauchamp, T. L., & Childress, J. F. (2019). *Principles of Biomedical Ethics* (8th ed.). Oxford University Press.
-2. Bonebright, D. A. (2010). 40 years of storming: a historical review of Tuckman's model of small group development. *Human Resource Development International*, 13(1), 111–120.
-3. Bunt, H., Petukhova, V., Traum, D., & Alexandersson, J. (2020). Dialogue Act Annotation with the ISO 24617-2 Standard.
-4. Cowen, A. S., & Keltner, D. (2017). Self-report captures 27 distinct categories of emotion. *PNAS*, 114(38), E7900–E7909.
-5. Dunbar, R. I. M., Arnaboldi, V., Conti, M., & Passarella, A. (2015). The structure of online social networks mirrors those in the offline world. *Social Networks*, 43, 39–47.
-6. Funder, D. C., & Ozer, D. J. (2019). Evaluating effect size in psychological research: Sense and nonsense. *Advances in Methods and Practices in Psychological Science*, 2(2), 156–168.
-7. Hain, T., Burget, L., Dines, J., Garner, P. N., Grezl, F., Hannani, A. el, Huijbregts, M., Karafiat, M., Lincoln, M., & Wan, V. (2012). Transcribing meetings with the AMIDA systems. *IEEE Transactions on Audio, Speech, and Language Processing*, 20(2), 486–503.
-8. Lakens, D. (2013). Calculating and reporting effect sizes to facilitate cumulative science: A practical primer for t-tests and ANOVAs. *Frontiers in Psychology*, 4, 863.
-9. Levinson, S. C., & Torreira, F. (2015). Timing in turn-taking and its implications for processing models of language. *Frontiers in Psychology*, 6, 731.
-10. McHugh, M. L. (2012). Interrater reliability: the kappa statistic. *Biochemia Medica*, 22(3), 276–282.
-11. Park, G., Schwartz, H. A., Eichstaedt, J. C., Kern, M. L., Kosinski, M., Stillwell, D. J., Ungar, L. H., & Seligman, M. E. P. (2015). Automatic personality assessment through social media language. *Journal of Personality and Social Psychology*, 108(6), 934–952.
-12. Soto, C. J., & John, O. P. (2017). The next Big Five Inventory (BFI-2). *Journal of Personality and Social Psychology*, 113(1), 117–143.
-13. Wei, J., Wang, X., Schuurmans, D., Bosma, M., Ichter, B., Xia, F., Chi, E., Le, Q. V., & Zhou, D. (2022). Chain-of-Thought Prompting Elicits Reasoning in Large Language Models. *NeurIPS*.
-14. Wheelan, S. A. (2016). *Creating Effective Teams: A Guide for Members and Leaders* (5th ed.). SAGE Publications.
-
----
-
-*Документ автоматически сгенерирован на основании состояния репозитория от 2026-04-26.*
-*Раздел 6.2 будет дополнен фактическими результатами H6 после завершения прогона.*
-</file>
-
-<file path="docs/preregistration.md">
-# Предрегистрация исследования (Preregistration)
-
-**Тема:** Разработка комплекса средств для использования больших языковых моделей в социальной сфере
-
-**Объект исследования:** Многоагентная диалоговая система на базе больших языковых моделей (LLM), имитирующая социальное взаимодействие в малых группах.
-
-**Предмет исследования:** Способность LLM-агентов воспроизводить статистически значимые социально-психологические закономерности, известные из эмпирических исследований реальных групп.
-
-**Дата фиксации гипотез:** до начала экспериментов.
-**Принцип:** гипотезы фиксируются ДО сбора и анализа данных. Любое отклонение от протокола фиксируется в журнале изменений в конце документа с указанием причины.
-
----
-
-## 1. Исследовательский вопрос
-
-**Главный вопрос (RQ-main):**
-> Способна ли многоагентная система на базе LLM, при использовании персонологической параметризации (Big Five) и многоуровневой валидации, воспроизводить статистически значимые социально-психологические закономерности малых групп с эффектами размера ≥ medium (Cohen's d ≥ 0.5 / η² ≥ 0.06)?
-
-**Подвопросы:**
-
-- **RQ-1:** Влияют ли параметры Big Five (заданные через системный промпт) на наблюдаемое лингво-поведенческое профилирование агента (длина реплики, доля task-ориентированных актов) на статистически значимом уровне?
-- **RQ-2:** Воспроизводит ли многоагентная система временную последовательность стадий развития группы по Wheelan (forming → storming → norming → performing) на уровне, статистически отличимом от случайной марковской цепи?
-- **RQ-3:** Снижает ли многоуровневая валидация (грамматика → логика → этика) долю реплик, нарушающих моральные принципы Beauchamp & Childress, статистически значимо по сравнению с базовой конфигурацией без валидации?
-- **RQ-4:** Улучшает ли Chain-of-Thought-промптинг качество диалога (по операционализированным метрикам) по сравнению с базовым промптом?
-- **RQ-5:** Соответствует ли распределение коэффициента Джини турн-тейкинга в LLM-симуляции распределению, наблюдаемому в корпусах реальных малых групп?
-
----
-
-## 2. Теоретическая рамка
-
-Все источники — публикации 2010 года и новее (peer-reviewed журналы, материалы конференций уровня A*, монографии последних изданий).
-
-| Источник | Применение |
-|----------|------------|
-| Soto & John (2017) — BFI-2 (*J. Personality and Social Psychology*); Park et al. (2015) — Automatic personality assessment through social media language (*JPSP*) | Big Five — операционализация и связь черт личности с лингвистическим поведением (H1) |
-| Wheelan (2016) — *Creating Effective Teams* (5th ed., SAGE); Bonebright (2010) — 40 years of storming (*Human Resource Development International*) | Интегрированная модель развития малых групп; стадии forming → storming → norming → performing (H3) |
-| Beauchamp & Childress (2019) — *Principles of Biomedical Ethics* (8th ed., Oxford UP) | Моральные принципы валидации (H5) |
-| Wei et al. (2022) — Chain-of-Thought Prompting (*NeurIPS*) | Метод улучшения reasoning в LLM (H6) |
-| Levinson & Torreira (2015) — Timing in turn-taking (*Frontiers in Psychology*); Dunbar et al. (2015) — Structure of online and offline social networks (*Social Networks*) | Структура турн-тейкинга и распределение реплик в малых группах; коэффициент Джини (H7) |
-| Bunt et al. (2020) — Dialogue Act Annotation with the ISO 24617-2 Standard | Таксономия диалоговых актов (H1, H3) |
-| Funder & Ozer (2019) — Evaluating effect size (*AMPPS*); Lakens (2013) — Calculating and reporting effect sizes (*Frontiers in Psychology*) | Современные пороги и интерпретация размеров эффектов |
-| McHugh (2012) — Interrater reliability: the kappa statistic (*Biochemia Medica*) | Интерпретация κ Коэна для inter-rater reliability |
-| Hain et al. (2012) — Transcribing Meetings With the AMIDA Systems (*IEEE Trans. ASLP*) | Описание и применение AMI Meeting Corpus (H7, калибровка H3) |
-
----
-
-## 3. Гипотезы
-
-Все гипотезы формулируются в форме нулевой (H₀) и альтернативной (H₁) с указанием статистического критерия, уровня значимости α, минимального размера эффекта и решающего правила.
-
-Общие соглашения:
-- Уровень значимости по умолчанию: **α = 0.05**.
-- Поправка на множественные сравнения: **Holm–Bonferroni** при семействе из K тестов.
-- Мощность теста при планировании: **1 − β = 0.80**.
-- Минимально значимый эффект: **medium** в современной интерпретации (Funder & Ozer, 2019; Lakens, 2013): d = 0.5; η² = 0.06; ρ = 0.3; w = 0.3.
-- Все стат. тесты выполняются в `scipy.stats` / `statsmodels`. Конкретные функции указаны.
-
-### H1. Влияние экстраверсии на длину реплики (RQ-1)
-
-**Теоретическое обоснование:** Park et al. (2015) на корпусе из ~700 тыс. сообщений 65 тыс. пользователей Facebook показали устойчивую связь экстраверсии (по BFI / IPIP-NEO) с лингвистическими маркерами: более высокий объём речи, частота упоминаний социальных контекстов и положительной аффективной лексики. Соответствующая операционализация Big Five берётся из BFI-2 (Soto & John, 2017).
-
-**Операционализация:**
-- Независимая переменная X — уровень экстраверсии агента, заданный через `BigFiveProfile.extraversion`. Категориально: **low** (≤ 0.3), **mid** ∈ (0.3, 0.7), **high** (≥ 0.7).
-- Зависимая переменная Y — средняя длина реплики агента в словах за диалог.
-- Контрольные переменные: остальные четыре черты OCEAN зафиксированы на 0.5; роль агента = "explorer"; модель LLM, температура, длина диалога фиксированы.
-
-**Гипотезы:**
-- **H₀:** μ_low = μ_mid = μ_high.
-- **H₁:** ∃ i, j : μ_i ≠ μ_j.
-
-**Статистический критерий:** однофакторный ANOVA (`scipy.stats.f_oneway`); пост-хок — Tukey HSD при отвержении H₀.
-
-**Решающее правило:** H₀ отвергается, если **p < 0.05 И η² ≥ 0.06**. Иначе — нет оснований отвергнуть H₀.
-
-**План выборки:** N = 480 диалогов (по 160 на уровень экстраверсии); каждый диалог = 20 ходов; единица анализа = один агент в одном диалоге; фиксированные random seeds {1..480}. Размер обоснован power-анализом (см. journal entry 2026-04-26): для f = 0.25 (medium) при α = 0.05, 1−β = 0.80 требуется ≥ 158 наблюдений на группу.
-
-**Ожидаемый результат:** при подтверждении H₁ — high-extraversion агенты продуцируют статистически значимо более длинные реплики.
-
----
-
-### H3. Воспроизведение стадий развития группы (RQ-2)
-
-**Теоретическое обоснование:** Wheelan (2016, 5-е изд. *Creating Effective Teams*) обобщает Integrated Model of Group Development: последовательность стадий forming → storming → norming → performing в реальных малых группах с предсказуемой структурой переходов. Историко-методологический обзор и подтверждение модели на современных данных — Bonebright (2010). Стадии диагностируются по соотношению категорий диалоговых актов (ISO 24617-2; Bunt et al., 2020): доля socio-emotional vs task, доля negative socio (storming), доля agreements (norming).
-
-**Операционализация:**
-- Каждый диалог разбивается на скользящие окна W = 10 ходов (шаг 5 ходов).
-- Для каждого окна вычисляется вектор признаков (доли диалоговых актов) и определяется стадия sₖ ∈ {forming=1, storming=2, norming=3, performing=4} классификатором, обученным на правилах из `scientific_analytics.py`.
-- Получаем последовательность (s₁, s₂, ..., s_K) для каждого диалога.
-- Строится матрица переходов P = [p_ij]₄ₓ₄.
-
-**Гипотезы:**
-- **H₀:** последовательность стадий случайна — наблюдаемая матрица переходов P_obs неотличима от равномерной матрицы P_uniform = (1/4)·𝟙 (вероятность каждого перехода равна 0.25).
-- **H₁:** P_obs ≠ P_uniform.
-
-**Статистический критерий:** χ²-тест согласия (`scipy.stats.chisquare`) для матрицы переходов; α = 0.01 (более строгий из-за чувствительности теста к размеру выборки).
-
-**Дополнительный тест монотонности:** тест тренда Кокса–Стюарта (Cox–Stuart) на медианном индексе стадии в первых vs последних окнах диалога: ожидаем рост индекса (stadium → performing).
-
-**Решающее правило:** H₀ отвергается, если **χ²-тест: p < 0.01 И w (Cohen's w) ≥ 0.3** И **тест Кокса–Стюарта подтверждает положительный тренд (p < 0.05)**.
-
-**План выборки:** N = 30 независимых диалогов; длина каждого = **60 ходов** (даёт ≈ 10 окон-переходов на диалог при W=10, шаг 5); роли = {explorer, critic, facilitator}; OCEAN рандомизированы с фиксированным seed. Итого ≈ 300 наблюдений-переходов; power-анализ требует ≥ 283 для w = 0.3 при α = 0.01, 1−β = 0.80.
-
-**Ожидаемый результат:** при подтверждении H₁ — наблюдается структурированный переход через стадии с тенденцией к performing.
-
----
-
-### H5. Эффективность многоуровневой валидации (RQ-3)
-
-**Теоретическое обоснование:** Beauchamp & Childress (2019) — четыре принципа (fairness, autonomy, inclusivity, non-maleficence). LLM без валидации генерирует токсичные/несправедливые/принуждающие реплики с ненулевой частотой; валидационный конвейер должен снижать эту частоту.
-
-**Операционализация:**
-- Bernoulli-исход для каждой реплики: y ∈ {0, 1}, где y = 1 при нарушении хотя бы одного из четырёх моральных принципов.
-- Оценка y проводится **независимым LLM-судьёй** (другой моделью или другим запуском с холодной температурой) с подтверждением через ручную выборку (см. раздел Inter-rater reliability).
-- Группа A (treatment): валидация включена (полный pipeline из `validators.py`).
-- Группа B (control): валидация выключена.
-
-**Гипотезы:**
-- **H₀:** p_A = p_B (доля нарушений одинакова с/без валидации).
-- **H₁:** p_A < p_B (одностороннее).
-
-**Статистический критерий:** двухвыборочный z-тест пропорций (`statsmodels.stats.proportions_ztest`, односторонний), α = 0.01; альтернатива при малой выборке нарушений — точный тест Фишера.
-
-**Решающее правило:** H₀ отвергается, если **p < 0.01 И абсолютное снижение |p_A − p_B| ≥ 0.05** (минимально практически значимый эффект — снижение токсичности на 5 процентных пунктов).
-
-**План выборки:** N_A = N_B = 30 диалогов по 30 ходов = 900 реплик в каждой группе. Темы и составы агентов рандомизированы и сбалансированы между группами.
-
-**Inter-rater reliability:** случайная подвыборка 100 реплик размечается дважды (LLM-судья + автор работы); требуется κ Коэна ≥ 0.7. Если κ < 0.7 — пересмотр критериев разметки до сбора основной выборки.
-
-**Ожидаемый результат:** при подтверждении H₁ — валидация снижает долю нарушений на ≥ 5 п.п. с p < 0.01.
-
----
-
-### H6. Эффективность Chain-of-Thought-промптинга (RQ-4)
-
-**Теоретическое обоснование:** Wei et al. (2022) — CoT улучшает reasoning в задачах, требующих многошаговых рассуждений. В контексте диалога это должно проявиться в повышении доли actionable-предложений (содержащих план действий, конкретные шаги, оценку рисков).
-
-**Операционализация:**
-- Зависимая переменная Y — actionability_rate диалога: доля реплик, содержащих action-маркеры (модальные глаголы should/could/let's, императивы, конкретные действия). Метрика реализована в `analytics.py:actionability_rate`.
-- Группа A (treatment): системный промпт содержит CoT-инструкцию ("think step by step before responding: 1) what was just said, 2) what's missing, 3) my next contribution").
-- Группа B (control): базовый системный промпт без CoT.
-
-**Гипотезы:**
-- **H₀:** μ_A = μ_B.
-- **H₁:** μ_A > μ_B (одностороннее).
-
-**Статистический критерий:** двухвыборочный t-тест Уэлча (`scipy.stats.ttest_ind` с `equal_var=False`, односторонний); размер эффекта — Cohen's d.
-
-**Решающее правило:** H₀ отвергается, если **p < 0.05 И d ≥ 0.5**.
-
-**Вспомогательные ZП:**
-- Дополнительно проверяется coherence (через эмбеддинговую близость соседних реплик) — корреляционно, без формального теста.
-- Проверка на регрессии: средняя длина реплики не должна вырасти существенно (CoT иногда генерирует "болтовню") — отслеживается, но не формально тестируется.
-
-**План выборки:** N_A = N_B = **55 диалогов** по 20 ходов; единица анализа = диалог; фиксированные seeds; одинаковые темы и составы агентов между группами (paired design рассматривается, но используется independent). Power-анализ: для d = 0.5 при α = 0.05, 1−β = 0.80 требуется ≥ 51 диалог на группу; берём 55 с запасом.
-
-**Ожидаемый результат:** при подтверждении H₁ — CoT повышает actionability с d ≥ 0.5.
-
----
-
-### H7. Соответствие турн-тейкинга человеческим корпусам (RQ-5)
-
-**Теоретическое обоснование:** Levinson & Torreira (2015) в обзоре современных моделей турн-тейкинга показывают, что распределение длительностей реплик и переходов в реальных диалогах подчиняется устойчивой статистике; Dunbar et al. (2015) на материале офлайн- и онлайн-групп подтверждают, что в малых группах коэффициент Джини распределения числа реплик по участникам лежит в диапазоне G ∈ [0.2, 0.45]. Если LLM-агенты воспроизводят человеко-подобную структуру взаимодействия, распределение Джини в LLM-диалогах должно быть статистически неотличимо от человеческого.
-
-**Операционализация:**
-- Для каждого LLM-диалога (выборка S_LLM) и каждого человеческого диалога из референс-корпуса (выборка S_human) вычисляется коэффициент Джини распределения числа реплик.
-- Размер группы согласован: 3–5 участников в обеих выборках.
-
-**Гипотезы:**
-- **H₀:** распределения G_LLM и G_human статистически идентичны (тест Манна–Уитни не отвергает гипотезу о равенстве).
-- **H₁:** распределения различаются.
-
-**Статистический критерий:** двухсторонний тест Манна–Уитни U (`scipy.stats.mannwhitneyu`), α = 0.05; дополнительно — тест Колмогорова–Смирнова (`scipy.stats.ks_2samp`) для проверки совпадения распределений.
-
-**Решающее правило (нестандартное — equivalence testing):**
-Поскольку в данной гипотезе мы хотим **подтвердить** соответствие (а не отвергнуть), используется TOST (Two One-Sided Tests) с границами эквивалентности Δ_low = -0.1, Δ_high = +0.1 для медианной разности.
-- **H₀_TOST:** медианная разность лежит вне [-0.1, +0.1] — распределения **различаются практически значимо**.
-- **H₁_TOST:** медианная разность лежит в [-0.1, +0.1] — **эквивалентны**.
-
-H₀_TOST отвергается (≡ эквивалентность подтверждается), если оба односторонних теста дают p < 0.05.
-
-**План выборки:** N_LLM = **70 диалогов**; N_human ≥ 70 диалогов из корпуса AMI Meeting Corpus (см. раздел "Корпус валидации"). Power-анализ (приближение через t-test с ARE-коррекцией для Mann–Whitney): для d = 0.5 при α = 0.05, 1−β = 0.80 требуется ≥ 66 на группу; берём 70.
-
-**Ожидаемый результат:** TOST подтвердит эквивалентность → LLM-симуляция воспроизводит человеческий паттерн распределения реплик.
-
----
-
-## 4. Семейство гипотез и поправка на множественность
-
-Тестируется K = 5 гипотез (H1, H3, H5, H6, H7). Применяется поправка **Holm–Bonferroni**:
-- Сортируются p-values по возрастанию: p₍₁₎ ≤ p₍₂₎ ≤ ... ≤ p₍₅₎.
-- H_(i) отвергается, если p₍ᵢ₎ < α / (K − i + 1).
-- α = 0.05 (для H3 — 0.01, учитывается отдельно).
-
-Результаты с поправкой репортятся отдельно от "сырых" p-values.
-
----
-
-## 5. Контролируемые переменные и параметры экспериментов
-
-| Параметр | Значение | Обоснование |
-|----------|----------|-------------|
-| LLM-модель | `gpt-4o-mini` | фиксируется во всех экспериментах для сравнимости |
-| Температура | 0.7 | стандартная для разговорных задач |
-| `max_tokens` | 200 | предотвращает overlong replies |
-| Длина диалога (ходов) | 20 (H1, H6); 30 (H5); 60 (H3); 40 (H7) | диктуется минимально необходимой длиной для проявления эффекта; H3 удлинён до 60 для накопления ≥ 283 transitions при N=30 (см. journal 2026-04-26) |
-| Размер группы | 3 агента (H1, H6); 3–5 (H3, H5, H7) | соответствует диапазону реальных малых групп |
-| Random seed | фиксируется для каждого прогона: seed = experiment_id × 1000 + run_id | воспроизводимость |
-| Тема диалога | фиксированный набор из 5 тем, рандомизирован между прогонами | контроль контента |
-
----
-
-## 6. Корпус валидации
-
-**Основной корпус:** AMI Meeting Corpus (используется в актуальной форме, описанной в Hain et al., 2012, *IEEE Trans. ASLP*; продолжает оставаться эталонным корпусом для multi-party meetings до 2020-х гг.).
-- 100 часов записанных совещаний по 4 человека.
-- Транскрипции с разметкой диалоговых актов и говорящих.
-- Доступен открыто: https://groups.inf.ed.ac.uk/ami/corpus/
-
-**Используется для:**
-- H7 (распределение Джини турн-тейкинга).
-- Проверки распределений эмоционального тона (вспомогательно, не формальная гипотеза).
-- Калибровки порогов классификатора стадий Wheelan (H3).
-
-**Альтернатива/дополнение:** MELD (Multimodal EmotionLines Dataset, Poria et al., 2019) — для вспомогательной валидации эмоциональной разметки.
-
-**Препроцессинг AMI:**
-1. Извлечение последовательности (speaker, utterance, timestamp).
-2. Сэмплирование 30 диалогов случайным образом (seed = 42).
-3. Усечение до первых 40 ходов для согласования с LLM-выборкой.
-4. Расчёт коэффициента Джини на полученной выборке.
-
----
-
-## 7. Inter-rater reliability (для H5 и вспомогательной разметки)
-
-Все автоматические разметки, которые используются в гипотезах (моральные нарушения, диалоговые акты, стадии группы), валидируются на подвыборке вручную или через независимый LLM-judge.
-
-**Протокол:**
-1. Случайная подвыборка размера ≥ 100 единиц (реплик / окон).
-2. Разметка двумя источниками: (a) основной автомат, (b) альтернативный (другая LLM или ручная).
-3. Расчёт κ Коэна (`sklearn.metrics.cohen_kappa_score`).
-4. Требование: **κ ≥ 0.7** (substantial agreement; современная интерпретация порогов и расчёта — McHugh, 2012).
-5. При κ < 0.7 — итеративный пересмотр критериев разметки на отдельной отладочной выборке (не входящей в основные данные).
-
----
-
-## 8. План анализа
-
-Для каждой гипотезы:
-
-1. **Power analysis** до сбора данных: расчёт минимального N через `statsmodels.stats.power` для α = 0.05, 1−β = 0.80, ожидаемый эффект = medium. Если посчитанный N превышает запланированный — увеличить выборку или сообщить об ограниченной мощности.
-2. **Сбор данных** строго по протоколу из раздела 5; никаких пилотных корректировок гипотез после начала сбора.
-3. **Проверка предпосылок теста** (нормальность — тест Шапиро–Уилка; гомогенность дисперсий — тест Левене). При нарушениях — переход на непараметрический аналог (указан для каждой гипотезы).
-4. **Применение основного теста** + расчёт размера эффекта + 95% CI.
-5. **Применение поправки Holm–Bonferroni** для семейства из 5 гипотез.
-6. **Репорт**: статистика, p (raw), p (adjusted), размер эффекта, CI, решение по H₀.
-
----
-
-## 9. Решающие правила (сводная таблица)
-
-| Гипотеза | Тест | α | Эффект ≥ | Доп. условие |
-|---------|------|---|----------|--------------|
-| H1 | ANOVA + Tukey HSD | 0.05 | η² ≥ 0.06 | — |
-| H3 | χ² + Cox–Stuart | 0.01 | w ≥ 0.3 | положительный тренд по Cox–Stuart (p < 0.05) |
-| H5 | z-тест пропорций (1-side) | 0.01 | Δp ≥ 0.05 | κ Коэна ≥ 0.7 при разметке |
-| H6 | t-тест Уэлча (1-side) | 0.05 | d ≥ 0.5 | — |
-| H7 | TOST (Mann–Whitney) | 0.05 | \|Δmedian\| ≤ 0.1 | оба односторонних теста значимы |
-
----
-
-## 10. Возможные исходы и их интерпретация
-
-| Сценарий | Интерпретация для главного RQ |
-|----------|-------------------------------|
-| Все 5 гипотез поддерживают H₁ | Сильное свидетельство в пользу способности LLM-системы воспроизводить социально-психологические закономерности |
-| 3–4 из 5 гипотез поддерживают H₁ | Умеренное свидетельство; выявить специфику отвергнутых гипотез |
-| 1–2 гипотезы поддерживают H₁ | Слабое свидетельство; основной вывод — система воспроизводит лишь отдельные аспекты |
-| Ни одна гипотеза не поддерживает H₁ | Гипотеза о LLM-симуляции как валидном инструменте социального исследования **не подтверждается** в текущей реализации; формулируются ограничения и перспективы |
-
-**Важно:** ни в одном из исходов мы не "доказываем" H₁ окончательно. В терминологии научного руководителя: при отвержении H₀ говорим, что _исследование не противоречит H₁_, и формулируем H₁ как теорию, применимую к данному классу систем.
-
----
-
-## 11. Журнал изменений протокола
-
-_Любые изменения после фиксации преrегистрации записываются здесь с датой, причиной и эффектом на статистическую интерпретацию._
-
-| Дата | Изменение | Причина | Влияние на анализ |
-|------|-----------|---------|-------------------|
-| 2026-04-26 | Первая редакция | — | — |
-| 2026-04-26 | Размеры выборок увеличены: H1: 60→480, H6: 60→110 (по 55/группа), H7: 30→70 LLM (+70 human); длина диалога для H3: 40→60 ходов (≈10 transitions/диалог × 30 = 300 ≥ 283 needed) | Power-анализ через `power_analysis.py` показал, что исходные N не обеспечивают 1−β=0.80 для medium-эффекта. Стратегия "C" (гибрид): H5 не менялся; остальные подняты до уровня, удовлетворяющего power-критерию | Усиливается мощность теста; результаты будут способны обнаружить medium-эффекты, что снижает риск ложно-отрицательного вывода. Решающие правила (α, эффект-пороги) не изменились |
-
----
-
-## 12. Ссылки
-
-Все источники — 2010 года и новее.
-
-1. Beauchamp, T. L., & Childress, J. F. (2019). *Principles of Biomedical Ethics* (8th ed.). Oxford University Press.
-2. Bonebright, D. A. (2010). 40 years of storming: a historical review of Tuckman's model of small group development. *Human Resource Development International*, 13(1), 111–120.
-3. Bunt, H., Petukhova, V., Traum, D., & Alexandersson, J. (2020). Dialogue Act Annotation with the ISO 24617-2 Standard. In *Multimodal Interaction with W3C Standards*.
-4. Dunbar, R. I. M., Arnaboldi, V., Conti, M., & Passarella, A. (2015). The structure of online social networks mirrors those in the offline world. *Social Networks*, 43, 39–47.
-5. Funder, D. C., & Ozer, D. J. (2019). Evaluating effect size in psychological research: Sense and nonsense. *Advances in Methods and Practices in Psychological Science*, 2(2), 156–168.
-6. Hain, T., Burget, L., Dines, J., Garner, P. N., Grezl, F., Hannani, A. el, Huijbregts, M., Karafiat, M., Lincoln, M., & Wan, V. (2012). Transcribing meetings with the AMIDA systems. *IEEE Transactions on Audio, Speech, and Language Processing*, 20(2), 486–503.
-7. Lakens, D. (2013). Calculating and reporting effect sizes to facilitate cumulative science: A practical primer for t-tests and ANOVAs. *Frontiers in Psychology*, 4, 863.
-8. Levinson, S. C., & Torreira, F. (2015). Timing in turn-taking and its implications for processing models of language. *Frontiers in Psychology*, 6, 731.
-9. McHugh, M. L. (2012). Interrater reliability: the kappa statistic. *Biochemia Medica*, 22(3), 276–282.
-10. Park, G., Schwartz, H. A., Eichstaedt, J. C., Kern, M. L., Kosinski, M., Stillwell, D. J., Ungar, L. H., & Seligman, M. E. P. (2015). Automatic personality assessment through social media language. *Journal of Personality and Social Psychology*, 108(6), 934–952.
-11. Poria, S., Hazarika, D., Majumder, N., Naik, G., Cambria, E., & Mihalcea, R. (2019). MELD: A multimodal multi-party dataset for emotion recognition in conversations. In *Proceedings of ACL 2019*, 527–536.
-12. Soto, C. J., & John, O. P. (2017). The next Big Five Inventory (BFI-2): Developing and assessing a hierarchical model with 15 facets to enhance bandwidth, fidelity, and predictive power. *Journal of Personality and Social Psychology*, 113(1), 117–143.
-13. Wei, J., Wang, X., Schuurmans, D., Bosma, M., Ichter, B., Xia, F., Chi, E., Le, Q. V., & Zhou, D. (2022). Chain-of-thought prompting elicits reasoning in large language models. *Advances in Neural Information Processing Systems*, 35.
-14. Wheelan, S. A. (2016). *Creating Effective Teams: A Guide for Members and Leaders* (5th ed.). SAGE Publications.
-</file>
-
 <file path="docs/PROJECT_RESULTS.md">
 # Результаты реализации проекта
 
@@ -8134,12 +7393,7 @@ _Любые изменения после фиксации преrегистра
 </file>
 
 <file path="docs/ИНСТРУКЦИЯ_ДЛЯ_РУКОВОДИТЕЛЯ.md">
-# Agent Dialogue Simulator — руководство для научного руководителя
-
-> Документ написан так, чтобы человек, никогда не видевший проект, мог за 30–40 минут
-> установить его, запустить, провести симуляцию и понять, какие отчёты можно
-> ожидать и где они лежат. По ходу даны ссылки на конкретные файлы — их легко
-> открыть в любом редакторе или прямо на GitHub.
+# Agent Dialogue Simulator — подробная инструкция по проекту
 
 ---
 
@@ -8248,14 +7502,17 @@ agent_dialogue_sim/
 │   ├── profiles.py             генерация персон (опросник + LLM)
 │   ├── validators.py           8-уровневая проверка реплик
 │   ├── observer_agent.py       наблюдатель для триангуляции
+│   ├── env_context.py          контексты среды (seminar / coursework / startup)
+│   ├── human_io.py             ввод/вывод для режима «человек в диалоге»
 │   ├── prompts.py              системные промпты
 │   └── io_logger.py            запись JSONL + Markdown
 │
 ├── analytics/             ← вся аналитика и отчёты
-│   ├── basic.py                базовые метрики (tone, reciprocity, entropy)
-│   ├── scientific.py           научный анализ + генератор гипотез
-│   ├── advanced.py             emotional contagion, LSM, discourse coherence
-│   └── visualize.py            4-панельный граф (matplotlib + networkx)
+│   ├── basic.py                  базовые метрики (tone, reciprocity, entropy)
+│   ├── scientific.py             научный анализ + генератор гипотез
+│   ├── advanced.py               emotional contagion, LSM, discourse coherence
+│   ├── hypothesis_validator.py   формальный валидатор гипотез + evidence-trail
+│   └── visualize.py              4-панельный граф (matplotlib + networkx)
 │
 ├── webapp/                ← Flask-приложение
 │   ├── app.py                  REST API
@@ -8263,22 +7520,29 @@ agent_dialogue_sim/
 │   └── static/{app.js,style.css}
 │
 ├── science/               ← научный инструментарий для строгих экспериментов
-│   ├── statistical_tests.py    t-test, Mann-Whitney, Spearman, Cohen d
-│   ├── causal_intervention.py  Pearl's do-оператор для Big Five
-│   ├── wheelan_classifier.py   классификация фаз команды
-│   ├── power_analysis.py       расчёт минимального N
-│   ├── manipulation_check.py   проверка, что вмешательство сработало
-│   ├── toxicity_judge.py       LLM-судья токсичности (H5)
-│   └── ami_parser.py           парсер AMI Meeting Corpus (human baseline)
+│   ├── statistical_tests.py       t-test, Mann-Whitney, Spearman, Cohen d
+│   ├── causal_intervention.py     Pearl's do-оператор для Big Five
+│   ├── wheelan_classifier.py      классификация фаз команды
+│   ├── power_analysis.py          расчёт минимального N
+│   ├── manipulation_check.py      проверка, что вмешательство сработало
+│   ├── toxicity_judge.py          LLM-судья токсичности (H5)
+│   ├── ami_parser.py              парсер AMI Meeting Corpus (human baseline)
+│   ├── api_credits_check.py       проверка остатка кредитов API
+│   └── verify_experiment_results.py  верификация результатов прогона
 │
 ├── experiments/           ← CLI-раннеры экспериментов
 │   ├── run_causal.py           каузальные интервенции (см. § 8)
+│   ├── run_experiments.py      запуск серии экспериментов из конфига
+│   ├── ab_experiments.py       A/B-сравнения условий
+│   ├── runner.py               общий runner для прогонов
+│   ├── configs/                YAML/JSON конфиги экспериментов
 │   └── results/                артефакты прогонов
 │
 ├── tests/                 ← pytest-тесты (см. § 10)
 ├── docs/                  ← документация (preregistration, рецензия, эта инструкция)
 ├── uml_diagrams/          ← PlantUML-диаграммы архитектуры
 ├── config.py              ← все настройки и пути
+├── utils.py               ← общие утилиты
 ├── main.py                ← CLI-режим (диалог в консоли)
 ├── README.md
 └── requirements.txt
@@ -8406,7 +7670,7 @@ Sacks/Schegloff/Jefferson 1974, Newman 2010).
 Это позволяет за 10 секунд понять, на чём основан конкретный вывод, не лезя в
 исходный код.
 
-### 6.5 Validation Report (`analytics/basic.py`, функция `get_hypothesis_validation_report`)
+### 6.5 Validation Report (`analytics/hypothesis_validator.py`)
 
 Файл `validation_turn_*.md`. По каждой гипотезе фиксируется:
 
@@ -8511,6 +7775,16 @@ python3 -m agent_dialogue_sim.experiments.run_causal \
 - `summary.json` — агрегированные эффекты (Cohen d, p-value);
 - `REPORT.md` — человеко-читаемый отчёт.
 
+### 8.3 Серии экспериментов и A/B-сравнения
+
+- `experiments/run_experiments.py` — запуск пакета экспериментов по
+  конфиг-файлу из `experiments/configs/`. Удобно, когда нужно прогнать
+  одинаковый сценарий с разными значениями черт.
+- `experiments/ab_experiments.py` — попарные сравнения условий A vs B с
+  одинаковыми сидами; используется для оценки эффектов отдельных факторов.
+- `experiments/runner.py` — общий низкоуровневый runner, на который опираются
+  все скрипты выше.
+
 На веб-странице есть отдельная вкладка «🔬 Каузальные эксперименты» —
 ссылка справа вверху главного экрана.
 
@@ -8574,7 +7848,10 @@ pytest agent_dialogue_sim/tests/ -v
 - `test_toxicity_judge.py` — LLM-судья токсичности;
 - `test_ami_parser.py` — парсер human-корпуса AMI;
 - `test_hypothesis_validator_formal.py` — формальная проверка гипотез;
-- `test_strict_mode.py` — режим строгой валидации (для научных прогонов).
+- `test_strict_mode.py` — режим строгой валидации (для научных прогонов);
+- `test_api_credits_check.py` — проверка остатка кредитов API;
+- `test_experiment_runner.py` — раннер серий экспериментов;
+- `test_verify_experiment_results.py` — верификация результатов прогона.
 
 ---
 
@@ -8607,9 +7884,10 @@ advanced analytics — это **дополнительные LLM-вызовы**)
 
 **Где посмотреть архитектуру?**
 Папка `uml_diagrams/` — там `agent_dialogue_sim.puml` (полная class diagram),
-`agent_dialogue_sim_compact.puml` (компактная), `use_case_diagram.puml`
-(use cases), `architecture_diagram.puml`. Открываются любым PlantUML-вьюером
-или на `https://www.plantuml.com/plantuml`.
+`agent_dialogue_sim_compact.puml` (компактная), `agent_dialogue_sim_simple.puml`
+(упрощённая), `agent_dialogue_sim_final.puml`, `agent_dialogue_sim_presentation.puml`
+(для презентации), `use_case_diagram.puml` (use cases), `architecture_diagram.puml`.
+Открываются любым PlantUML-вьюером или на `https://www.plantuml.com/plantuml`.
 
 **Как остановить эксперимент?**
 В веб-режиме — Ctrl+C в терминале с сервером. CLI-эксперименты (`run_causal`)
@@ -8618,556 +7896,14 @@ advanced analytics — это **дополнительные LLM-вызовы**)
 
 ---
 
-## Контакты и связанные документы
+## Связанные документы
 
 - `README.md` — короткий обзор проекта на английском.
 - `docs/preregistration.md` — preregistration гипотез H1–H7.
 - `docs/PROJECT_RESULTS.md` — результаты завершённых экспериментов.
+- `docs/КУРСОВАЯ_ЗАДАНИЕ.md` — формулировка курсового задания.
 - `docs/РЕЦЕНЗИЯ.md` — предыдущие рецензии.
 - `uml_diagrams/README.md` — описание UML-диаграмм.
-</file>
-
-<file path="docs/КУРСОВАЯ_ЗАДАНИЕ.md">
-# Задание на курсовую работу
-
-## Тема: Симулятор многоагентных диалогов с управляемыми стилями общения на основе больших языковых моделей
-
----
-
-| № п/п | Содержание работы | Форма отчетности | Срок исполнения | Отметка о выполнении |
-|-------|-------------------|------------------|-----------------|----------------------|
-| **1.** | **Аналитическая часть** | | | |
-| 1.1. | Изучение и сравнительный анализ поведения языковых моделей ChatGPT и DeepSeek с целью определения подходов к реализации управляемых стилей общения агентов в зависимости от требований задачи. | Разделы ПЗ | 28.03.25 | |
-| 1.2. | Изучение и анализ возможных типов поведения различных нейросетевых моделей для определения оптимальных настроек агентов с различными ролями (исследователь, критик, фасилитатор, аналитик, инноватор). | Разделы ПЗ | 28.03.25 | |
-| 1.3. | Анализ возможностей формирования контекста диалога для определения стратегий построения промптов, обеспечивающих согласованное взаимодействие между несколькими агентами. | Разделы ПЗ | 28.03.25 | |
-| 1.4. | Анализ методов инженерии промптов (Chain-of-Thought, Few-shot Learning) применительно к задачам генерации реплик с заданными характеристиками тона, эмоций и адресации. | Разделы ПЗ | 28.03.25 | |
-| 1.5. | Оформление расширенного содержания пояснительной записки (РСПЗ). | Текст РСПЗ | 28.03.25 | |
-| **2.** | **Теоретическая часть** | | | |
-| 2.1. | Теоретические основы больших языковых моделей (LLM): архитектура, принципы работы API, методы генерации текста с контролируемыми параметрами (temperature, max_tokens). | Разделы ПЗ | 16.05.25 | |
-| 2.2. | Разработка системы промптов и сценариев для обучения агентов различным ролям и стилям общения с использованием техники Chain-of-Thought. | Разделы ПЗ | 16.05.25 | |
-| 2.3. | Проектирование программного интерфейса для взаимодействия с языковыми моделями, обеспечивающего выбор стиля общения, настройку параметров агентов и управление ходом диалога. | Разделы ПЗ | 16.05.25 | |
-| 2.4. | Разработка методов адаптации языковых моделей для точного воспроизведения заданных ролей и стилей общения с учётом контекста дискуссии; теоретические основы анализа социальных взаимодействий: теория социальных сетей, модель группового развития, таксономия диалоговых актов, размерностная модель эмоций. | Разделы ПЗ | 16.05.25 | |
-| **3.** | **Инженерная часть** | | | |
-| 3.1. | Проектирование системы взаимодействия с языковыми моделями, включая компоненты для управления стилями общения, обработки структурированных ответов и валидации реплик агентов. | Разделы ПЗ, исполняемые файлы | 16.05.25 | |
-| 3.2. | Использование методологии итеративной разработки для поэтапного создания и тестирования компонентов системы. | Разделы ПЗ, исполняемые файлы | 16.05.25 | |
-| 3.3. | Разработка архитектуры системы, включающей: компонент управления диалогом и выбора говорящего; компонент генерации ответов с учётом роли, фазы диалога и настроения; компонент многоуровневой валидации сообщений; хранилище промптов, профилей агентов и конфигураций. | Разделы ПЗ, исполняемые файлы | 16.05.25 | |
-| 3.4. | Результаты проектирования оформить с использованием диаграмм UML (диаграммы классов, последовательности, компонентов). | Разделы ПЗ, исполняемые файлы | 16.05.25 | |
-| **4.** | **Технологическая и практическая часть** | | | |
-| 4.1. | Реализация программного комплекса, включающего: веб-интерфейс и командную строку для управления симуляцией; систему управления диалогом с поддержкой многоагентного взаимодействия; систему продвинутых промптов с контекстно-зависимой адаптацией; хранилище конфигураций агентов и сценариев окружений. | Исполняемые файлы | 16.05.25 | |
-| 4.2. | Разработка системы валидации сообщений: грамматическая проверка (длина, пунктуация, язык); логическая проверка (согласованность адресата, соответствие тона и эмоции); этическая проверка (токсичность, уважительность, профессиональные границы). | Исполняемые файлы | 16.05.25 | |
-| 4.3. | Реализация системы аналитики диалогов: расчёт метрик (тон, эмоциональная энтропия, взаимность, задержка ответа); научный анализ на основе современных фреймворков социального взаимодействия; генерация гипотез о динамике группового взаимодействия. | Исполняемые файлы | 16.05.25 | |
-| 4.4. | Требования к архитектуре системы: модульность, расширяемость для добавления новых ролей агентов, конфигурируемость параметров через переменные окружения. | Разделы ПЗ | 16.05.25 | |
-| 4.5. | Программный комплекс, способный генерировать диалоги с участием нескольких агентов с различными ролями, с высокой согласованностью и адаптацией к контексту обсуждения; визуализация диалогов с построением графа взаимодействий между агентами; отображение метрик и гипотез в веб-интерфейсе; экспорт результатов в форматы JSON, Markdown. | Разделы ПЗ, исполняемые файлы | 16.05.25 | |
-| 4.6. | Использование OpenAI API, DeepSeek API, Python, Flask, NetworkX, Pydantic и сопутствующих библиотек. | Разделы ПЗ, исполняемые файлы | 16.05.25 | |
-| 4.7. | Ожидаемый результат: готовый сервис для симуляции и анализа многоагентных диалогов, позволяющий исследовать динамику социальных взаимодействий в виртуальной среде. | Исполняемые файлы | 16.05.25 | |
-| **5.** | Оформление пояснительной записки (ПЗ) и иллюстративного материала для доклада. | Текст ПЗ, презентация | 16.05.25 | |
-
----
-
-## Краткое описание проекта
-
-**Цель работы:** Разработка программного комплекса для симуляции многоагентных диалогов с управляемыми стилями общения на основе больших языковых моделей.
-
-**Основные компоненты системы:**
-
-1. **Система управления диалогом** — координация взаимодействия между агентами, выбор следующего говорящего, управление фазами диалога.
-
-2. **Система продвинутых промптов** — формирование контекстно-зависимых инструкций для агентов с использованием техник Chain-of-Thought и Few-shot Learning.
-
-3. **Система валидации** — многоуровневая проверка сообщений (грамматическая, логическая, этическая).
-
-4. **Система аналитики** — расчёт метрик качества диалога и генерация гипотез на основе научных фреймворков.
-
-5. **Веб-интерфейс и CLI** — пользовательские интерфейсы для управления симуляцией и просмотра результатов.
-
-**Технологический стек:**
-- Python 3.10+
-- OpenAI API / DeepSeek API
-- Flask (веб-фреймворк)
-- NetworkX (анализ графов)
-- Pydantic (валидация данных)
-- Matplotlib (визуализация)
-
-**Роли агентов:**
-- Explorer (исследователь) — задаёт вопросы, ищет новые идеи
-- Critic (критик) — находит риски и проблемы
-- Facilitator (фасилитатор) — координирует обсуждение
-- Analyst (аналитик) — структурирует информацию
-- Innovator (инноватор) — предлагает нестандартные решения
-
-**Научная основа (источники 2010+):**
-- Анализ диалоговых актов — ISO 24617-2 (Bunt et al., 2020)
-- Модель группового развития — Wheelan (2016, *Creating Effective Teams*, 5th ed.); Bonebright (2010)
-- Big Five — Soto & John (2017, BFI-2); язык и личность — Park et al. (2015)
-- Размер эффектов — Funder & Ozer (2019); Lakens (2013)
-- Inter-rater reliability — McHugh (2012)
-- Турн-тейкинг — Levinson & Torreira (2015); Dunbar et al. (2015)
-</file>
-
-<file path="docs/РЕЦЕНЗИЯ.md">
-## Тема: Симулятор диалогов мультиагентной системы с аналитикой и валидацией
-
----
-
-## 1️⃣ Архитектура построения модели и принципы ее реализации
-
-### Архитектура
-
-Система построена по **модульной архитектуре** с четким разделением ответственности:
-
-```
-┌─────────────────────────────────────────────────────┐
-│               AGENT DIALOGUE SIMULATOR               │
-├─────────────────────────────────────────────────────┤
-│                                                      │
-│  ┌──────────────┐  ┌──────────────┐  ┌───────────┐ │
-│  │   Agents     │  │   Dialogue   │  │ Validation│ │
-│  │   Layer      │→ │   Manager    │→ │  Pipeline │ │
-│  └──────────────┘  └──────────────┘  └───────────┘ │
-│         ↓                 ↓                 ↓        │
-│  ┌──────────────┐  ┌──────────────┐  ┌───────────┐ │
-│  │  Prompts +   │  │  Analytics   │  │    I/O    │ │
-│  │  LLM (GPT)   │  │  + Metrics   │  │  Logger   │ │
-│  └──────────────┘  └──────────────┘  └───────────┘ │
-│                           ↓                          │
-│                  ┌──────────────┐                   │
-│                  │ Visualization │                   │
-│                  │  (NetworkX)   │                   │
-│                  └──────────────┘                   │
-└─────────────────────────────────────────────────────┘
-```
-
-### Основные компоненты
-
-#### A) **Агенты** (`agents.py`)
-- Каждый агент имеет: имя, характер (nature), цвет (для визуализации)
-- Характер определяет стиль общения через **системные промпты**:
-  - **Explorer** — любопытный, задает вопросы
-  - **Critic** — замечает риски и недочеты
-  - **Facilitator** — сглаживает конфликты, координирует
-- Реализация: dataclass с property `system_prompt`
-
-#### B) **Менеджер диалога** (`dialogue_manager.py`)
-Центральный компонент, управляющий процессом:
-
-1. **Выбор говорящего**: round-robin с алгоритмом разнообразия
-   - Приоритет адресату из предыдущего сообщения
-   - Предотвращение "пинг-понга" (если A↔B повторяется, выбирается C)
-   
-2. **Формирование контекста**: последние 8 сообщений + инструкции
-   
-3. **Вызов модели**: OpenAI GPT-4o-mini через **function calling**
-   - Инструмент: `submit_agent_turn` с JSON-схемой
-   - Гарантирует структурированный ответ: `{reply, tone, emotion, target}`
-   
-4. **Валидация**: многоуровневая проверка (см. раздел 3)
-   
-5. **Логирование**: JSONL + Markdown
-
-#### C) **Аналитика** (`analytics.py`)
-Вычисляет метрики каждые 5 ходов:
-
-| Метрика | Формула | Интерпретация |
-|---------|---------|---------------|
-| Средняя тональность | \(\frac{1}{N}\sum \text{score}(tone_i)\), где score=+1/0/-1 | >0.2: позитивный диалог<br><-0.2: конфликт |
-| Энтропия эмоций | \(H = -\sum p(e) \log_2 p(e)\) | 0-0.5: низкое разнообразие<br>>1.5: высокая эмоциональность |
-| Взаимность | \(\frac{\text{пары с A→B и B→A}}{\text{всего пар}}\) | >0.7: высокая вовлеченность |
-| Задержка ответа | Среднее число ходов от адресации до ответа | 0-1: мгновенный ответ<br>>2: задержка |
-
-#### D) **Визуализация** (`visualize.py`)
-- **NetworkX** для построения графа коммуникаций
-- **Matplotlib** для рендеринга
-- **Узлы**: размер ~ активность, цвет = роль агента, обводка = последняя эмоция
-- **Рёбра**: каждое сообщение = отдельная стрелка, цвет = тональность (красный→зелёный)
-
-#### E) **Валидация** (`validators.py`) 🆕
-- 8 валидаторов (грамматика, логика, мораль)
-- Блокирует критические ошибки (токсичность, self-targeting, неанглийский язык)
-- Подробнее — в разделе 3
-
-#### F) **Веб-интерфейс** (`web_app.py`)
-- **Flask API** для пошагового запуска симуляции
-- Endpoints: `/api/start`, `/api/step`, `/api/state`
-- UI: транскрипт диалога + граф + метрики + гипотезы
-
-### Принципы реализации
-
-1. **Строгая структура данных**
-   - Pydantic-модель `AgentTurn` для валидации ответов LLM
-   - Обязательные поля: `reply`, `tone`, `emotion`, `target`
-
-2. **Принудительная адресация**
-   - Каждое сообщение должно иметь **конкретного адресата**
-   - Broadcasts (null/all) запрещены
-   - Обеспечивает структурированность диалога
-
-3. **Человекоподобность**
-   - Короткие фразы (1-2 предложения)
-   - Сокращения (I'm, don't, let's)
-   - Инструкция `HUMAN_STYLE` в промптах
-
-4. **Прозрачность и воспроизводимость**
-   - Все логи в JSONL (машиночитаемый) + Markdown (человекочитаемый)
-   - Графики сохраняются на каждом шаге
-   - Timestamp в UTC для каждого хода
-
-5. **Модульность и расширяемость**
-   - Каждый компонент — отдельный модуль
-   - Легко добавить новых агентов, валидаторы, метрики
-   - Зависимости минимальны (OpenAI SDK, NetworkX, Flask)
-
----
-
-## 2️⃣ Теоретические основы дипломной работы
-
-### Используемые области знаний
-
-#### A) **Большие языковые модели (LLM)**
-
-- **Модель**: GPT-4o-mini (OpenAI)
-- **Техника**: Function Calling (Structured Output)
-  - Модель не просто генерирует текст, а **вызывает функцию** с JSON-аргументами
-  - Гарантирует валидный формат ответа
-  - Пример:
-    ```json
-    {
-      "reply": "That's interesting! What's your take, Bob?",
-      "tone": "positive",
-      "emotion": "curious",
-      "target": "Bob"
-    }
-    ```
-
-**Литература:**
-- Brown et al. (2020) — Language Models are Few-Shot Learners
-- OpenAI Function Calling Documentation
-
-#### B) **Multi-Agent Systems (MAS)**
-
-- **Определение**: Система из нескольких автономных агентов, взаимодействующих для достижения общей цели
-- **Применение**: Симуляция групповой дискуссии с разными ролями
-- **Алгоритм взаимодействия**:
-  - Round-robin scheduling с приоритетом адресата
-  - Предотвращение ping-pong через анализ истории
-  - Разнообразие адресатов (target diversity)
-
-**Литература:**
-- Wooldridge (2009) — An Introduction to MultiAgent Systems
-- Ferber (1999) — Multi-Agent Systems
-
-#### C) **Анализ диалога (Dialogue Analysis)**
-
-**1. Sentiment Analysis (анализ тональности)**
-- Классификация: positive / neutral / negative
-- Используется для оценки "настроения" диалога
-- Метрика: средняя тональность \(\in [-1, 1]\)
-
-**2. Emotion Tracking**
-- Детекция эмоций: joyful, angry, calm, skeptical, etc.
-- Метрика: энтропия эмоций (Shannon entropy) для измерения разнообразия
-
-**3. Addressee Prediction**
-- Проверка правильности выбора адресата
-- Метрика: % сообщений с явным адресатом
-
-**Литература:**
-- Liu (2012) — Sentiment Analysis and Opinion Mining
-- Strapparava & Mihalcea (2008) — Learning to Identify Emotions in Text
-
-#### D) **Теория графов (Graph Theory)**
-
-- **Граф коммуникаций**: направленный граф \(G = (V, E)\)
-  - \(V\) — агенты (узлы)
-  - \(E\) — сообщения (рёбра): \((u, v)\) если \(u\) обращается к \(v\)
-  
-- **Метрики:**
-  - **In-degree** / **Out-degree** — сколько раз агент был адресатом / говорил
-  - **Reciprocity** — доля взаимных обменов: \(\frac{|\{(u,v): (u,v) \in E \land (v,u) \in E\}|}{|E|}\)
-
-**Литература:**
-- Newman (2010) — Networks: An Introduction
-- Wasserman & Faust (1994) — Social Network Analysis
-
-#### E) **Теория информации (Information Theory)**
-
-- **Энтропия Шеннона** для эмоций:
-  \[
-  H = -\sum_{e \in \text{emotions}} p(e) \log_2 p(e)
-  \]
-  где \(p(e)\) — частота эмоции \(e\)
-
-- **Интерпретация:**
-  - \(H = 0\): одна эмоция (монотонность)
-  - \(H > 1.5\): высокое разнообразие (возможная фрагментация)
-
-**Литература:**
-- Shannon (1948) — A Mathematical Theory of Communication
-- Cover & Thomas (2006) — Elements of Information Theory
-
-#### F) **Этика ИИ и моральные схемы** 🆕
-
-- **Moral Schemas**: формальные правила для оценки этичности поведения агентов
-- **Принципы** (из этики Beauchamp & Childress):
-  - **Autonomy** (автономия) — запрет принуждения
-  - **Non-maleficence** (ненанесение вреда) — запрет токсичности
-  - **Justice** (справедливость) — предотвращение исключения участников
-  - **Beneficence** (благодеяние) — поощрение сотрудничества
-
-**Литература:**
-- Beauchamp & Childress (2019) — Principles of Biomedical Ethics
-- Wallach & Allen (2008) — Moral Machines: Teaching Robots Right from Wrong
-
-#### G) **Human-Computer Interaction (HCI)**
-
-- **Веб-интерфейс** для удобства взаимодействия
-- **Визуализация** метрик и графов в реальном времени
-- **Пошаговое управление** симуляцией (user control)
-
-**Литература:**
-- Shneiderman et al. (2016) — Designing the User Interface
-
----
-
-## 3️⃣ Формализм в работе
-
-### A) Формальная модель системы
-
-Система определяется как кортеж:
-
-\[
-S = (A, H, M, V, \phi)
-\]
-
-где:
-- \(A = \{a_1, a_2, ..., a_n\}\) — множество агентов
-- \(H = [h_1, h_2, ..., h_t]\) — история диалога (последовательность ходов)
-- \(M: A \times H \to \text{Turn}\) — модель генерации хода (LLM)
-- \(V: \text{Turn} \times H \to \{\text{valid}, \text{invalid}\}\) — функция валидации
-- \(\phi: H \to \text{Metrics}\) — функция аналитики
-
-### B) Формализм хода (Turn)
-
-Каждый ход \(h_i \in H\) — это структура:
-
-\[
-h_i = (\text{speaker}, \text{target}, \text{reply}, \text{tone}, \text{emotion}, t_i)
-\]
-
-где:
-- \(\text{speaker} \in A\) — говорящий агент
-- \(\text{target} \in A \setminus \{\text{speaker}\}\) — адресат (обязательно ≠ speaker)
-- \(\text{reply} \in \Sigma^*\) — текст сообщения (строка)
-- \(\text{tone} \in \{\text{positive}, \text{neutral}, \text{negative}\}\) — тональность
-- \(\text{emotion} \in E\) — эмоция, где \(E = \{\text{joyful}, \text{calm}, \text{angry}, ...\}\)
-- \(t_i \in \mathbb{N}\) — номер хода
-
-**Ограничения:**
-1. \(\text{target} \neq \text{speaker}\) (запрет self-addressing)
-2. \(\text{reply} \neq \emptyset\) (сообщение не пустое)
-3. \(\text{reply}\) содержит только латинские символы (English-only)
-
-### C) Метрики (формулы)
-
-#### 1. Средняя тональность
-
-\[
-\bar{\tau}(H) = \frac{1}{|H|} \sum_{h \in H} s(\text{tone}_h)
-\]
-
-где функция score:
-
-\[
-s(\text{tone}) = \begin{cases}
-+1 & \text{if tone = positive} \\
-0 & \text{if tone = neutral} \\
--1 & \text{if tone = negative}
-\end{cases}
-\]
-
-#### 2. Энтропия эмоций
-
-\[
-H_{\text{emotion}} = -\sum_{e \in E} p(e) \log_2 p(e)
-\]
-
-где:
-\[
-p(e) = \frac{|\{h \in H : \text{emotion}_h = e\}|}{|H|}
-\]
-
-#### 3. Взаимность (Reciprocity)
-
-\[
-R(H) = \frac{|\{(u, v) \in P : (v, u) \in P\}|}{|P|}
-\]
-
-где \(P\) — множество пар (speaker, target) в истории:
-
-\[
-P = \{(\text{speaker}_h, \text{target}_h) : h \in H\}
-\]
-
-#### 4. Задержка ответа (Response Delay)
-
-\[
-D(H) = \frac{1}{K} \sum_{k=1}^{K} (t_{\text{reply}}^{(k)} - t_{\text{addressed}}^{(k)})
-\]
-
-где \(K\) — число пар "адресация → ответ", а \(t_{\text{reply}}^{(k)}\) и \(t_{\text{addressed}}^{(k)}\) — номера ходов.
-
-### D) Граф коммуникаций
-
-Граф \(G = (V, E)\):
-- \(V = A\) (узлы = агенты)
-- \(E = \{(u, v) : \exists h \in H_{\text{window}} : \text{speaker}_h = u \land \text{target}_h = v\}\)
-
-где \(H_{\text{window}}\) — последние \(W\) ходов (окно).
-
-**Вес ребра:**
-
-\[
-w(u, v) = |\{h \in H_{\text{window}} : \text{speaker}_h = u \land \text{target}_h = v\}|
-\]
-
-**Цвет ребра:**
-
-\[
-c(u, v) = \text{tone\_to\_color}\left(\frac{1}{w(u,v)} \sum_{\substack{h \in H_{\text{window}} \\ \text{speaker}_h = u, \text{target}_h = v}} s(\text{tone}_h)\right)
-\]
-
-где `tone_to_color` — линейная интерполяция между красным (−1) и зелёным (+1).
-
-### E) Система валидации (моральные схемы)
-
-**Моральная схема** \(M\) определяется как кортеж:
-
-\[
-M = (P, R, V)
-\]
-
-где:
-- \(P = \{p_1, p_2, ..., p_m\}\) — множество **моральных принципов**
-  - \(p_1\): Справедливость (fairness)
-  - \(p_2\): Уважение автономии (autonomy)
-  - \(p_3\): Инклюзивность (inclusivity)
-  - \(p_4\): Ненанесение вреда (non-maleficence)
-
-- \(R = \{r_1, r_2, ..., r_k\}\) — множество **правил** (паттернов)
-  
-  Каждое правило \(r_i: \Sigma^* \to \{0, 1\}\) проверяет, нарушается ли принцип.
-  
-  **Примеры:**
-  
-  \[
-  r_{\text{exclusion}}(\text{reply}) = \begin{cases}
-  1 & \text{if reply matches } \texttt{/(exclude|ignore)/} \\
-  0 & \text{otherwise}
-  \end{cases}
-  \]
-  
-  \[
-  r_{\text{coercion}}(\text{reply}) = \begin{cases}
-  1 & \text{if reply matches } \texttt{/(force|must do)/} \\
-  0 & \text{otherwise}
-  \end{cases}
-  \]
-
-- \(V: \{r_1, ..., r_k\} \to L\) — функция **оценки серьезности** нарушения
-  
-  где \(L = \{\text{info}, \text{warning}, \text{error}, \text{critical}\}\)
-
-**Функция валидации хода:**
-
-\[
-\text{validate}(h) = \begin{cases}
-\text{valid} & \text{if } \forall r \in R: r(\text{reply}_h) = 0 \lor V(r) \neq \text{critical} \\
-\text{invalid} & \text{otherwise}
-\end{cases}
-\]
-
-**Таблица правил:**
-
-| Правило | Паттерн (regex) | Принцип | Уровень |
-|---------|-----------------|---------|---------|
-| \(r_1\) | `/(exclude\|ignore\|leave out)/` | Inclusivity | ERROR |
-| \(r_2\) | `/(force\|must do\|make you)/` | Autonomy | ERROR |
-| \(r_3\) | `/(stupid\|idiot\|moron)/` | Non-maleficence | CRITICAL |
-| \(r_4\) | `/(you always fail\|you never)/` | Respect | ERROR |
-
-### F) Алгоритм выбора следующего говорящего
-
-```
-function next_speaker(history, agents):
-    if history is empty:
-        return agents[0]
-    
-    last = history[-1]
-    last_target = last.target
-    last_speaker = last.speaker
-    
-    # Приоритет: адресат из последнего хода
-    idx = find_index(agents, last_target)
-    
-    # Проверка ping-pong
-    if len(history) >= 2:
-        prev = history[-2]
-        if prev.target == last_speaker AND prev.speaker == last_target:
-            # Выбрать третьего агента
-            idx = find_index(agents, agent NOT IN {last_speaker, last_target})
-    
-    if idx is None:
-        # Fallback: round-robin
-        idx = (current_turn % len(agents))
-    
-    return agents[idx]
-```
-
-**Формально:**
-
-\[
-\text{next\_speaker}(H, A) = \begin{cases}
-a_{\text{target}_{h_{|H|}}} & \text{if no ping-pong} \\
-a_k \in A \setminus \{a_{\text{speaker}_{h_{|H|}}}, a_{\text{target}_{h_{|H|}}}\} & \text{if ping-pong detected} \\
-a_{(|H| \mod |A|)} & \text{fallback}
-\end{cases}
-\]
-
----
-
-## Итоговая сводка
-
-### Архитектура
-- **Модульная система** с 9 компонентами (agents, dialogue manager, validators, analytics, visualize, web app, logger, prompts, config)
-- **Принципы**: структурированность (Pydantic), прозрачность (JSONL logs), расширяемость
-
-### Теоретические основы
-- **LLM** (GPT-4 + function calling)
-- **Multi-agent systems** (round-robin + diversity)
-- **Dialogue analysis** (sentiment, emotion, addressee)
-- **Graph theory** (communication graph, reciprocity)
-- **Information theory** (entropy)
-- **AI Ethics** (moral schemas) 🆕
-
-### Формализм
-- Формальная модель системы: \(S = (A, H, M, V, \phi)\)
-- Структура хода: \(h = (\text{speaker}, \text{target}, \text{reply}, \text{tone}, \text{emotion}, t)\)
-- Метрики: тональность, энтропия, взаимность, задержка (с формулами)
-- Моральные схемы: \(M = (P, R, V)\) с правилами и уровнями серьезности
-
----
-
-## Дополнительные материалы
-
-- **Полная документация валидации**: `VALIDATION_GUIDE.md` (English)
-- **Краткая справка**: `VALIDATION_RU.md` (Русский)
-- **Примеры кода**: `validation_examples.py`
-- **Тесты**: `test_validators.py`
-- **Основной README**: `README.md`
-
----
-
-**Дата:** 7 ноября 2025  
-**Статус:** Готово к защите ✅
 </file>
 
 <file path="experiments/configs/h1_extraversion.yaml">
@@ -17910,6 +16646,135 @@ DialogueManager ..> IOLogger
 
 WebApp --> DialogueManager
 WebApp --> IOLogger
+
+@enduml
+</file>
+
+<file path="uml_diagrams/agent_dialogue_sim_presentation.puml">
+@startuml AgentDialogueSimPresentation
+!theme plain
+
+' --- Стили: крупный шрифт + большие отступы для читаемости ---
+skinparam dpi 150
+skinparam defaultFontSize 18
+skinparam classFontSize 18
+skinparam classFontStyle bold
+skinparam classAttributeFontSize 16
+skinparam packageFontSize 22
+skinparam packageFontStyle bold
+skinparam noteFontSize 15
+
+skinparam nodesep 80
+skinparam ranksep 90
+skinparam padding 6
+skinparam roundcorner 12
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+
+skinparam classBackgroundColor #FAFAFA
+skinparam classBorderColor #4A6FA5
+skinparam classBorderThickness 1.4
+skinparam packageBackgroundColor #EEF2F7
+skinparam packageBorderColor #4A6FA5
+skinparam arrowColor #4A6FA5
+skinparam arrowThickness 1.3
+
+title <size:22><b>Архитектура системы симуляции многоагентных диалогов</b></size>
+
+package "Ядро" as core {
+    class Agent {
+        + name
+        + persona
+        + big_five
+        --
+        + system_prompt()
+    }
+
+    class DialogueManager {
+        + agents
+        + history
+        --
+        + step()
+        + run()
+    }
+
+    class AgentTurn {
+        + reply
+        + tone
+        + emotion
+        + target
+    }
+
+    class ObserverAgent {
+        + observe()
+    }
+}
+
+package "Валидация" as val {
+    abstract class BaseValidator {
+        + validate()
+    }
+
+    class ValidationPipeline {
+        + validators
+        --
+        + validate_turn()
+    }
+}
+
+package "Аналитика и наука" as ana {
+    class MetricsCalculator {
+        + compute_metrics()
+    }
+
+    class ScientificAnalyzer {
+        + analyze()
+    }
+
+    class HypothesisValidator {
+        + validate_hypothesis()
+    }
+
+    class CausalRunner {
+        + run_experiment()
+    }
+}
+
+package "Интерфейс и I/O" as io {
+    class WebApp {
+        + api_start()
+        + api_step()
+    }
+
+    class IOLogger {
+        + write_jsonl()
+        + write_markdown()
+    }
+}
+
+note right of BaseValidator
+  <b>Strategy Pattern</b>
+  Подклассы:
+  Grammatical, Language,
+  Logical, Toxicity,
+  Ethical, MoralSchema
+end note
+
+' --- Связи ---
+DialogueManager "1" *-- "*" Agent
+DialogueManager --> AgentTurn
+DialogueManager --> ValidationPipeline
+DialogueManager --> ObserverAgent
+ValidationPipeline *-- BaseValidator
+
+DialogueManager ..> MetricsCalculator
+DialogueManager ..> IOLogger
+ScientificAnalyzer ..> MetricsCalculator
+HypothesisValidator ..> ScientificAnalyzer
+CausalRunner ..> DialogueManager
+
+WebApp --> DialogueManager
 
 @enduml
 </file>

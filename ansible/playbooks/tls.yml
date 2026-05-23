@@ -1,0 +1,105 @@
+---
+# Однократный выпуск TLS-сертификата Let's Encrypt.
+# Решает chicken-and-egg между nginx (требует cert при старте) и certbot
+# (требует работающий nginx для webroot-валидации) через dummy self-signed.
+#
+# Запуск:
+#   ansible-playbook playbooks/tls.yml
+#   ansible-playbook playbooks/tls.yml -e le_staging=true   # staging-cert
+#   ansible-playbook playbooks/tls.yml -e force_renew=true  # пере-выпуск
+#
+# Идемпотентен: если cert уже есть и force_renew=false — ничего не делает.
+
+- name: Issue / renew Let's Encrypt certificate
+  hosts: prod
+  become: true
+  gather_facts: false
+
+  vars:
+    force_renew: false
+    primary_domain: "{{ le_domains[0] }}"
+
+  tasks:
+    - name: Проверить, есть ли действующий cert
+      ansible.builtin.command:
+        cmd: >
+          docker compose run --rm --entrypoint
+          "sh -c 'test -d /etc/letsencrypt/live/{{ primary_domain }}'"
+          certbot
+      args:
+        chdir: "{{ project_dir }}"
+      register: cert_check
+      failed_when: false
+      changed_when: false
+
+    - name: Skip — cert уже выпущен (force_renew=false)
+      ansible.builtin.meta: end_play
+      when:
+        - cert_check.rc == 0
+        - not force_renew | bool
+
+    # 1) Dummy self-signed cert, чтобы nginx стартанул
+    - name: Положить dummy-cert в /etc/letsencrypt/live
+      ansible.builtin.command:
+        cmd: >
+          docker compose run --rm --entrypoint
+          "sh -c 'mkdir -p /etc/letsencrypt/live/{{ primary_domain }} &&
+            openssl req -x509 -nodes -newkey rsa:4096 -days 1
+              -keyout /etc/letsencrypt/live/{{ primary_domain }}/privkey.pem
+              -out    /etc/letsencrypt/live/{{ primary_domain }}/fullchain.pem
+              -subj /CN=localhost &&
+            cp /etc/letsencrypt/live/{{ primary_domain }}/fullchain.pem
+               /etc/letsencrypt/live/{{ primary_domain }}/chain.pem'"
+          certbot
+      args:
+        chdir: "{{ project_dir }}"
+      changed_when: true
+
+    # 2) Поднять nginx с dummy-cert (force-recreate чтобы перечитать монтирования)
+    - name: Старт nginx
+      ansible.builtin.command:
+        cmd: docker compose up --force-recreate -d nginx
+      args:
+        chdir: "{{ project_dir }}"
+      changed_when: true
+
+    # 3) Удалить dummy
+    - name: Удалить dummy-cert
+      ansible.builtin.command:
+        cmd: >
+          docker compose run --rm --entrypoint
+          "sh -c 'rm -rf /etc/letsencrypt/live/{{ primary_domain }}
+                          /etc/letsencrypt/archive/{{ primary_domain }}
+                          /etc/letsencrypt/renewal/{{ primary_domain }}.conf'"
+          certbot
+      args:
+        chdir: "{{ project_dir }}"
+      changed_when: true
+
+    # 4) Реальный certbot
+    - name: Выпустить настоящий cert через certbot --webroot
+      ansible.builtin.command:
+        cmd: >
+          docker compose run --rm --entrypoint
+          "certbot certonly --webroot -w /var/www/certbot
+             --email {{ le_email }} --agree-tos --no-eff-email
+             {{ '--staging' if le_staging | bool else '' }}
+             --force-renewal
+             {% for d in le_domains %} -d {{ d }}{% endfor %}"
+          certbot
+      args:
+        chdir: "{{ project_dir }}"
+      register: certbot_run
+      changed_when: certbot_run.rc == 0
+
+    # 5) Reload nginx — подхватить настоящий cert
+    - name: nginx reload
+      ansible.builtin.command:
+        cmd: docker compose exec -T nginx nginx -s reload
+      args:
+        chdir: "{{ project_dir }}"
+      changed_when: true
+
+    - name: Готово
+      ansible.builtin.debug:
+        msg: "Cert для {{ le_domains | join(', ') }} выпущен. Проверьте: curl -fsS https://{{ primary_domain }}/api/health"

@@ -1,0 +1,123 @@
+---
+# Однократная подготовка чистого Ubuntu 22.04/24.04 VPS.
+#
+# Запуск:
+#   cd ansible
+#   ansible-playbook playbooks/bootstrap.yml
+#
+# Идемпотентен — можно прогонять повторно, ничего лишнего не сломает.
+
+- name: Bootstrap agent-dialogue VPS
+  hosts: prod
+  become: true
+  gather_facts: true
+
+  tasks:
+    # ---------------------------------------------------------------- пакеты
+    - name: APT — базовые пакеты
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - git
+          - ufw
+          - jq
+          - python3-pip
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    # ---------------------------------------------------------------- docker
+    - name: Docker GPG-ключ
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+        force: false
+
+    - name: Docker APT-репозиторий
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch={{ ansible_architecture | replace('x86_64','amd64')
+              | replace('aarch64','arm64') }}
+              signed-by=/etc/apt/keyrings/docker.asc]
+          https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
+        filename: docker
+        state: present
+        update_cache: true
+
+    - name: APT — docker engine + compose plugin
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+
+    - name: Docker — systemd unit запущен и enabled
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: true
+
+    # ----------------------------------------------------------- deploy user
+    - name: Deploy-юзер существует
+      ansible.builtin.user:
+        name: "{{ deploy_user }}"
+        shell: /bin/bash
+        groups: docker
+        append: true
+        state: present
+
+    # ----------------------------------------------------------------- ufw
+    - name: ufw — разрешённые порты
+      community.general.ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      loop: ["22", "80", "443"]
+
+    - name: ufw — включён с дефолтом deny incoming
+      community.general.ufw:
+        state: enabled
+        policy: deny
+        direction: incoming
+
+    # ----------------------------------------------------- репозиторий проекта
+    - name: Каталог проекта
+      ansible.builtin.file:
+        path: "{{ project_dir }}"
+        state: directory
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+        mode: "0755"
+
+    - name: git clone / fast-forward
+      become_user: "{{ deploy_user }}"
+      ansible.builtin.git:
+        repo: "{{ repo_url }}"
+        dest: "{{ project_dir }}"
+        version: "{{ repo_branch }}"
+        update: true
+        force: false   # не затирать локальные изменения молча
+      register: git_clone
+
+    # ---------------------------------------------------------------- .env
+    - name: .env создан из .env.example, если отсутствует
+      become_user: "{{ deploy_user }}"
+      ansible.builtin.copy:
+        src: "{{ project_dir }}/.env.example"
+        dest: "{{ project_dir }}/.env"
+        remote_src: true
+        force: false       # никогда не перезаписывать существующий .env
+        mode: "0600"
+
+    - name: Напоминание про .env
+      ansible.builtin.debug:
+        msg: >-
+          .env лежит в {{ project_dir }}/.env (mode 0600).
+          Отредактируйте OPENAI_API_KEY и при необходимости остальное:
+          `sudo -u {{ deploy_user }} nano {{ project_dir }}/.env`.

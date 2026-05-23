@@ -1,0 +1,6 @@
+---
+collections:
+  # 12.x — последняя ветка, совместимая с ansible-core 2.17 (которым ставится в CI).
+  # При апгрейде ansible-core до 2.18+ можно поднять до 13.x.
+  - name: community.general
+    version: ">=10.0.0,<13.0.0"
