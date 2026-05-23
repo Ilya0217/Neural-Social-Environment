@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [develop]
+
+jobs:
+  tests:
+    name: Pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Run pytest (без e2e/llm-зависимых тестов)
+        env:
+          OPENAI_API_KEY: "sk-ci-dummy"
+        run: |
+          # Не запускаем тесты, которым нужен живой LLM-ключ.
+          pytest -q \
+            --ignore=tests/test_api_credits_check.py \
+            --ignore=tests/test_verify_experiment_results.py \
+            --ignore=tests/test_experiment_runner.py || exit_code=$?
+          # Если pytest упал из-за отсутствия зависимостей в окружении CI,
+          # фейлим явно. Здесь просто пробрасываем код.
+          exit ${exit_code:-0}
+
+  docker-build:
+    name: Docker build smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build (без push) с кэшем
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          load: true
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: agent-dialogue-sim:ci
+
+      - name: Запуск контейнера и проверка /api/health
+        env:
+          OPENAI_API_KEY: "sk-ci-dummy"
+        run: |
+          docker run -d --name app -p 5000:5000 \
+            -e OPENAI_API_KEY="$OPENAI_API_KEY" \
+            agent-dialogue-sim:ci
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:5000/api/health; then
+              echo " — OK"; exit 0
+            fi
+            sleep 2
+          done
+          echo "healthcheck не прошёл" >&2
+          docker logs app
+          exit 1

@@ -1,0 +1,53 @@
+# VCS / IDE
+.git
+.gitignore
+.github
+.claude
+.opencode
+.idea
+.vscode
+.DS_Store
+
+# Python build artefacts
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.egg-info
+build
+dist
+
+# Local virtualenv (~400 MB) — никогда не должно попадать в образ
+.venv
+venv
+env
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Большие артефакты репозитория, не нужные приложению
+repomix-output.xml
+docs
+uml_diagrams
+tests
+scientific_report.md
+README.md
+
+# Runtime-выгрузки симулятора
+temp
+experiments/results
+**/outputs/graph_turn_*.png
+**/outputs/metrics_turn_*.md
+**/logs/dialog.*
+
+# Сам деплой-набор и compose — приложению не нужны
+Dockerfile
+docker-compose*.yml
+deploy
+nginx*.conf

@@ -1,0 +1,129 @@
+---
+# Каждая выкатка нового образа.
+#
+# Запуск из CI:
+#   ansible-playbook playbooks/deploy.yml --extra-vars image_tag=<sha>
+#
+# Вручную с локалки:
+#   ansible-playbook playbooks/deploy.yml                       # latest
+#   ansible-playbook playbooks/deploy.yml -e image_tag=<sha>    # rollback
+
+- name: Deploy agent-dialogue-sim
+  hosts: prod
+  become: true
+  gather_facts: false
+
+  vars:
+    image_full: "{{ image_repo }}:{{ image_tag }}"
+
+  tasks:
+    - name: Проверить, что .env существует
+      ansible.builtin.stat:
+        path: "{{ project_dir }}/.env"
+      register: env_stat
+
+    - name: Прервать, если .env отсутствует
+      ansible.builtin.fail:
+        msg: >-
+          {{ project_dir }}/.env не найден. Сначала прогоните bootstrap.yml
+          и заполните секреты на сервере.
+      when: not env_stat.stat.exists
+
+    # ----------------------------------------------------- синхронизация кода
+    - name: git fetch + reset на нужный SHA
+      become_user: "{{ deploy_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        git fetch --tags --prune origin
+        if [ "{{ image_tag }}" = "latest" ]; then
+          git reset --hard origin/{{ repo_branch }}
+        else
+          git reset --hard {{ image_tag }}
+        fi
+      args:
+        chdir: "{{ project_dir }}"
+        executable: /bin/bash
+      register: git_sync
+      changed_when: "'HEAD is now at' in git_sync.stdout"
+
+    # ----------------------------------------------------- pull нового образа
+    - name: docker compose pull app
+      become_user: "{{ deploy_user }}"
+      ansible.builtin.command:
+        cmd: docker compose pull app
+      args:
+        chdir: "{{ project_dir }}"
+      environment:
+        APP_IMAGE: "{{ image_full }}"
+      register: compose_pull
+      changed_when: "'Pulled' in compose_pull.stdout or 'Pull complete' in compose_pull.stderr"
+
+    # ----------------------------------------------------- up + remove-orphans
+    - name: docker compose up -d
+      become_user: "{{ deploy_user }}"
+      ansible.builtin.command:
+        cmd: docker compose up -d --remove-orphans
+      args:
+        chdir: "{{ project_dir }}"
+      environment:
+        APP_IMAGE: "{{ image_full }}"
+        APP_PULL_POLICY: always
+      changed_when: true
+
+    # ----------------------------------------------------- nginx reload (на случай если nginx.conf обновился через git pull)
+    - name: nginx -t
+      become_user: "{{ deploy_user }}"
+      ansible.builtin.command:
+        cmd: docker compose exec -T nginx nginx -t
+      args:
+        chdir: "{{ project_dir }}"
+      register: nginx_test
+      changed_when: false
+      failed_when: false
+
+    - name: nginx reload (если конфиг валидный)
+      become_user: "{{ deploy_user }}"
+      ansible.builtin.command:
+        cmd: docker compose exec -T nginx nginx -s reload
+      args:
+        chdir: "{{ project_dir }}"
+      when: nginx_test.rc == 0
+      changed_when: true
+
+    # ----------------------------------------------------- ждём healthy
+    - name: Дождаться healthy у agent-dialogue-app
+      become_user: "{{ deploy_user }}"
+      ansible.builtin.command:
+        cmd: docker inspect -f '{{ "{{" }}.State.Health.Status{{ "}}" }}' agent-dialogue-app
+      register: health_status
+      until: health_status.stdout == "healthy"
+      retries: 30
+      delay: 3
+      failed_when:
+        - health_status.stdout != "healthy"
+      changed_when: false
+
+    # ----------------------------------------------------- smoke-тест через nginx
+    - name: Smoke-тест {{ healthcheck_url }}
+      ansible.builtin.uri:
+        url: "{{ healthcheck_url }}"
+        return_content: false
+        status_code: 200
+        timeout: 10
+      delegate_to: localhost
+      become: false
+      register: smoke
+      retries: "{{ healthcheck_retries }}"
+      delay: "{{ healthcheck_delay }}"
+      until: smoke.status == 200
+
+    # ----------------------------------------------------- prune старых слоёв
+    - name: docker image prune (старые слои)
+      become_user: "{{ deploy_user }}"
+      ansible.builtin.command:
+        cmd: docker image prune -f
+      changed_when: false
+
+    - name: Готово
+      ansible.builtin.debug:
+        msg: "Выкатан образ {{ image_full }}. https://{{ le_domains[0] }} отвечает 200."
