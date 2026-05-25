@@ -29,6 +29,12 @@
         cache_valid_time: 3600
 
     # ---------------------------------------------------------------- docker
+    - name: Каталог /etc/apt/keyrings
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
     - name: Docker GPG-ключ
       ansible.builtin.get_url:
         url: https://download.docker.com/linux/ubuntu/gpg
