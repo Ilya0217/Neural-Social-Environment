@@ -42,6 +42,10 @@ The content is organized as follows:
 <directory_structure>
 .claude/
   scheduled_tasks.lock
+.github/
+  workflows/
+    ci.yml
+    deploy.yml
 analytics/
   __init__.py
   advanced.py
@@ -49,6 +53,18 @@ analytics/
   hypothesis_validator.py
   scientific.py
   visualize.py
+ansible/
+  group_vars/
+    all.yml
+  playbooks/
+    bootstrap.yml
+    deploy.yml
+    tls.yml
+  .gitignore
+  ansible.cfg
+  inventory.example.ini
+  README.md
+  requirements.yml
 core/
   __init__.py
   agents.py
@@ -132,9 +148,14 @@ webapp/
   __init__.py
   app.py
 __init__.py
+.dockerignore
+.env.example
 .gitignore
 config.py
+docker-compose.yml
+Dockerfile
 main.py
+nginx.conf
 README.md
 requirements.txt
 scientific_report.md
@@ -146,6 +167,214 @@ This section contains the contents of the repository's files.
 
 <file path=".claude/scheduled_tasks.lock">
 {"sessionId":"45d4fe9e-882c-4d6c-9122-fa7c6fe9a132","pid":45221,"procStart":"Sun Apr 26 13:29:08 2026","acquiredAt":1777214699534}
+</file>
+
+<file path=".github/workflows/ci.yml">
+name: CI
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [develop]
+
+jobs:
+  tests:
+    name: Pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Run pytest (без e2e/llm-зависимых тестов)
+        env:
+          OPENAI_API_KEY: "sk-ci-dummy"
+        run: |
+          # Не запускаем тесты, которым нужен живой LLM-ключ.
+          pytest -q \
+            --ignore=tests/test_api_credits_check.py \
+            --ignore=tests/test_verify_experiment_results.py \
+            --ignore=tests/test_experiment_runner.py || exit_code=$?
+          # Если pytest упал из-за отсутствия зависимостей в окружении CI,
+          # фейлим явно. Здесь просто пробрасываем код.
+          exit ${exit_code:-0}
+
+  docker-build:
+    name: Docker build smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build (без push) с кэшем
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          load: true
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: agent-dialogue-sim:ci
+
+      - name: Запуск контейнера и проверка /api/health
+        env:
+          OPENAI_API_KEY: "sk-ci-dummy"
+        run: |
+          docker run -d --name app -p 5000:5000 \
+            -e OPENAI_API_KEY="$OPENAI_API_KEY" \
+            agent-dialogue-sim:ci
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:5000/api/health; then
+              echo " — OK"; exit 0
+            fi
+            sleep 2
+          done
+          echo "healthcheck не прошёл" >&2
+          docker logs app
+          exit 1
+</file>
+
+<file path=".github/workflows/deploy.yml">
+name: Build & Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref для деплоя (по умолчанию — текущая ветка)"
+        required: false
+        default: ""
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/agent-dialogue-sim
+
+jobs:
+  build:
+    name: Build & push image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+      image_repo: ${{ steps.meta.outputs.image_repo }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags
+        id: meta
+        run: |
+          sha="${GITHUB_SHA::12}"
+          repo_lc="$(echo '${{ env.IMAGE_NAME }}' | tr '[:upper:]' '[:lower:]')"
+          echo "image_tag=$sha"                          >> "$GITHUB_OUTPUT"
+          echo "image_repo=${{ env.REGISTRY }}/$repo_lc" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: |
+            ${{ steps.meta.outputs.image_repo }}:latest
+            ${{ steps.meta.outputs.image_repo }}:${{ steps.meta.outputs.image_tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+  deploy:
+    name: Ansible deploy
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: prod
+      url: https://agent-dialogue.ru
+    steps:
+      - name: Checkout (для ansible/)
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ansible + collections
+        run: |
+          python -m pip install --upgrade pip
+          pip install "ansible-core>=2.16,<2.18"
+          ansible-galaxy collection install -r ansible/requirements.yml
+
+      - name: Add SSH key
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Render inventory
+        run: |
+          cat > ansible/inventory.ini <<EOF
+          [prod]
+          target ansible_host=${{ secrets.SSH_HOST }} ansible_user=${{ secrets.SSH_USER }}
+
+          [prod:vars]
+          ansible_python_interpreter = /usr/bin/python3
+          ansible_ssh_private_key_file = $HOME/.ssh/id_ed25519
+          EOF
+
+      - name: ansible-playbook deploy.yml
+        working-directory: ansible
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "True"
+          ANSIBLE_FORCE_COLOR: "True"
+        run: |
+          ansible-playbook \
+            -i inventory.ini \
+            --extra-vars "image_tag=${{ needs.build.outputs.image_tag }}" \
+            --extra-vars "image_repo=${{ needs.build.outputs.image_repo }}" \
+            playbooks/deploy.yml
 </file>
 
 <file path="analytics/__init__.py">
@@ -4311,6 +4540,569 @@ def draw_interactions_pro(
     fig.savefig(out_path, dpi=160, facecolor=fig.get_facecolor(),
                 bbox_inches=None, pad_inches=0.1)
     plt.close(fig)
+</file>
+
+<file path="ansible/group_vars/all.yml">
+---
+# Общие переменные для всех окружений. Переопределение — через --extra-vars или
+# group_vars/<group>.yml (например, group_vars/prod.yml).
+
+# --- Размещение приложения на сервере ----------------------------------------
+deploy_user:  agent
+project_dir:  /opt/agent-dialogue
+repo_url:     https://github.com/Ilya0217/Neural-Social-Environment.git
+repo_branch:  main
+
+# --- Docker-образ приложения -------------------------------------------------
+image_repo:   ghcr.io/ilya0217/agent-dialogue-sim
+# image_tag по умолчанию latest; в CI передаётся через --extra-vars image_tag=<sha>
+image_tag:    latest
+
+# --- Let's Encrypt -----------------------------------------------------------
+le_email:    admin@agent-dialogue.ru
+le_domains:
+  - agent-dialogue.ru
+  - www.agent-dialogue.ru
+# Для отладки certbot (избежать боевого rate-limit) выставить true.
+le_staging:  false
+
+# --- Healthcheck для deploy.yml ----------------------------------------------
+healthcheck_url:    https://agent-dialogue.ru/api/health
+healthcheck_retries: 15
+healthcheck_delay:   3
+</file>
+
+<file path="ansible/playbooks/bootstrap.yml">
+---
+# Однократная подготовка чистого Ubuntu 22.04/24.04 VPS.
+#
+# Запуск:
+#   cd ansible
+#   ansible-playbook playbooks/bootstrap.yml
+#
+# Идемпотентен — можно прогонять повторно, ничего лишнего не сломает.
+
+- name: Bootstrap agent-dialogue VPS
+  hosts: prod
+  become: true
+  gather_facts: true
+
+  tasks:
+    # ---------------------------------------------------------------- пакеты
+    - name: APT — базовые пакеты
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - git
+          - ufw
+          - jq
+          - python3-pip
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    # ---------------------------------------------------------------- docker
+    - name: Docker GPG-ключ
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+        force: false
+
+    - name: Docker APT-репозиторий
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch={{ ansible_architecture | replace('x86_64','amd64')
+              | replace('aarch64','arm64') }}
+              signed-by=/etc/apt/keyrings/docker.asc]
+          https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
+        filename: docker
+        state: present
+        update_cache: true
+
+    - name: APT — docker engine + compose plugin
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+
+    - name: Docker — systemd unit запущен и enabled
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: true
+
+    # ----------------------------------------------------------- deploy user
+    - name: Deploy-юзер существует
+      ansible.builtin.user:
+        name: "{{ deploy_user }}"
+        shell: /bin/bash
+        groups: docker
+        append: true
+        state: present
+
+    # ----------------------------------------------------------------- ufw
+    - name: ufw — разрешённые порты
+      community.general.ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      loop: ["22", "80", "443"]
+
+    - name: ufw — включён с дефолтом deny incoming
+      community.general.ufw:
+        state: enabled
+        policy: deny
+        direction: incoming
+
+    # ----------------------------------------------------- репозиторий проекта
+    - name: Каталог проекта
+      ansible.builtin.file:
+        path: "{{ project_dir }}"
+        state: directory
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+        mode: "0755"
+
+    - name: git clone / fast-forward
+      become_user: "{{ deploy_user }}"
+      ansible.builtin.git:
+        repo: "{{ repo_url }}"
+        dest: "{{ project_dir }}"
+        version: "{{ repo_branch }}"
+        update: true
+        force: false   # не затирать локальные изменения молча
+      register: git_clone
+
+    # ---------------------------------------------------------------- .env
+    - name: .env создан из .env.example, если отсутствует
+      become_user: "{{ deploy_user }}"
+      ansible.builtin.copy:
+        src: "{{ project_dir }}/.env.example"
+        dest: "{{ project_dir }}/.env"
+        remote_src: true
+        force: false       # никогда не перезаписывать существующий .env
+        mode: "0600"
+
+    - name: Напоминание про .env
+      ansible.builtin.debug:
+        msg: >-
+          .env лежит в {{ project_dir }}/.env (mode 0600).
+          Отредактируйте OPENAI_API_KEY и при необходимости остальное:
+          `sudo -u {{ deploy_user }} nano {{ project_dir }}/.env`.
+</file>
+
+<file path="ansible/playbooks/deploy.yml">
+---
+# Каждая выкатка нового образа.
+#
+# Запуск из CI:
+#   ansible-playbook playbooks/deploy.yml --extra-vars image_tag=<sha>
+#
+# Вручную с локалки:
+#   ansible-playbook playbooks/deploy.yml                       # latest
+#   ansible-playbook playbooks/deploy.yml -e image_tag=<sha>    # rollback
+
+- name: Deploy agent-dialogue-sim
+  hosts: prod
+  become: true
+  gather_facts: false
+
+  vars:
+    image_full: "{{ image_repo }}:{{ image_tag }}"
+
+  tasks:
+    - name: Проверить, что .env существует
+      ansible.builtin.stat:
+        path: "{{ project_dir }}/.env"
+      register: env_stat
+
+    - name: Прервать, если .env отсутствует
+      ansible.builtin.fail:
+        msg: >-
+          {{ project_dir }}/.env не найден. Сначала прогоните bootstrap.yml
+          и заполните секреты на сервере.
+      when: not env_stat.stat.exists
+
+    # ----------------------------------------------------- синхронизация кода
+    - name: git fetch + reset на нужный SHA
+      become_user: "{{ deploy_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        git fetch --tags --prune origin
+        if [ "{{ image_tag }}" = "latest" ]; then
+          git reset --hard origin/{{ repo_branch }}
+        else
+          git reset --hard {{ image_tag }}
+        fi
+      args:
+        chdir: "{{ project_dir }}"
+        executable: /bin/bash
+      register: git_sync
+      changed_when: "'HEAD is now at' in git_sync.stdout"
+
+    # ----------------------------------------------------- pull нового образа
+    - name: docker compose pull app
+      become_user: "{{ deploy_user }}"
+      ansible.builtin.command:
+        cmd: docker compose pull app
+      args:
+        chdir: "{{ project_dir }}"
+      environment:
+        APP_IMAGE: "{{ image_full }}"
+      register: compose_pull
+      changed_when: "'Pulled' in compose_pull.stdout or 'Pull complete' in compose_pull.stderr"
+
+    # ----------------------------------------------------- up + remove-orphans
+    - name: docker compose up -d
+      become_user: "{{ deploy_user }}"
+      ansible.builtin.command:
+        cmd: docker compose up -d --remove-orphans
+      args:
+        chdir: "{{ project_dir }}"
+      environment:
+        APP_IMAGE: "{{ image_full }}"
+        APP_PULL_POLICY: always
+      changed_when: true
+
+    # ----------------------------------------------------- nginx reload (на случай если nginx.conf обновился через git pull)
+    - name: nginx -t
+      become_user: "{{ deploy_user }}"
+      ansible.builtin.command:
+        cmd: docker compose exec -T nginx nginx -t
+      args:
+        chdir: "{{ project_dir }}"
+      register: nginx_test
+      changed_when: false
+      failed_when: false
+
+    - name: nginx reload (если конфиг валидный)
+      become_user: "{{ deploy_user }}"
+      ansible.builtin.command:
+        cmd: docker compose exec -T nginx nginx -s reload
+      args:
+        chdir: "{{ project_dir }}"
+      when: nginx_test.rc == 0
+      changed_when: true
+
+    # ----------------------------------------------------- ждём healthy
+    - name: Дождаться healthy у agent-dialogue-app
+      become_user: "{{ deploy_user }}"
+      ansible.builtin.command:
+        cmd: docker inspect -f '{{ "{{" }}.State.Health.Status{{ "}}" }}' agent-dialogue-app
+      register: health_status
+      until: health_status.stdout == "healthy"
+      retries: 30
+      delay: 3
+      failed_when:
+        - health_status.stdout != "healthy"
+      changed_when: false
+
+    # ----------------------------------------------------- smoke-тест через nginx
+    - name: Smoke-тест {{ healthcheck_url }}
+      ansible.builtin.uri:
+        url: "{{ healthcheck_url }}"
+        return_content: false
+        status_code: 200
+        timeout: 10
+      delegate_to: localhost
+      become: false
+      register: smoke
+      retries: "{{ healthcheck_retries }}"
+      delay: "{{ healthcheck_delay }}"
+      until: smoke.status == 200
+
+    # ----------------------------------------------------- prune старых слоёв
+    - name: docker image prune (старые слои)
+      become_user: "{{ deploy_user }}"
+      ansible.builtin.command:
+        cmd: docker image prune -f
+      changed_when: false
+
+    - name: Готово
+      ansible.builtin.debug:
+        msg: "Выкатан образ {{ image_full }}. https://{{ le_domains[0] }} отвечает 200."
+</file>
+
+<file path="ansible/playbooks/tls.yml">
+---
+# Однократный выпуск TLS-сертификата Let's Encrypt.
+# Решает chicken-and-egg между nginx (требует cert при старте) и certbot
+# (требует работающий nginx для webroot-валидации) через dummy self-signed.
+#
+# Запуск:
+#   ansible-playbook playbooks/tls.yml
+#   ansible-playbook playbooks/tls.yml -e le_staging=true   # staging-cert
+#   ansible-playbook playbooks/tls.yml -e force_renew=true  # пере-выпуск
+#
+# Идемпотентен: если cert уже есть и force_renew=false — ничего не делает.
+
+- name: Issue / renew Let's Encrypt certificate
+  hosts: prod
+  become: true
+  gather_facts: false
+
+  vars:
+    force_renew: false
+    primary_domain: "{{ le_domains[0] }}"
+
+  tasks:
+    - name: Проверить, есть ли действующий cert
+      ansible.builtin.command:
+        cmd: >
+          docker compose run --rm --entrypoint
+          "sh -c 'test -d /etc/letsencrypt/live/{{ primary_domain }}'"
+          certbot
+      args:
+        chdir: "{{ project_dir }}"
+      register: cert_check
+      failed_when: false
+      changed_when: false
+
+    - name: Skip — cert уже выпущен (force_renew=false)
+      ansible.builtin.meta: end_play
+      when:
+        - cert_check.rc == 0
+        - not force_renew | bool
+
+    # 1) Dummy self-signed cert, чтобы nginx стартанул
+    - name: Положить dummy-cert в /etc/letsencrypt/live
+      ansible.builtin.command:
+        cmd: >
+          docker compose run --rm --entrypoint
+          "sh -c 'mkdir -p /etc/letsencrypt/live/{{ primary_domain }} &&
+            openssl req -x509 -nodes -newkey rsa:4096 -days 1
+              -keyout /etc/letsencrypt/live/{{ primary_domain }}/privkey.pem
+              -out    /etc/letsencrypt/live/{{ primary_domain }}/fullchain.pem
+              -subj /CN=localhost &&
+            cp /etc/letsencrypt/live/{{ primary_domain }}/fullchain.pem
+               /etc/letsencrypt/live/{{ primary_domain }}/chain.pem'"
+          certbot
+      args:
+        chdir: "{{ project_dir }}"
+      changed_when: true
+
+    # 2) Поднять nginx с dummy-cert (force-recreate чтобы перечитать монтирования)
+    - name: Старт nginx
+      ansible.builtin.command:
+        cmd: docker compose up --force-recreate -d nginx
+      args:
+        chdir: "{{ project_dir }}"
+      changed_when: true
+
+    # 3) Удалить dummy
+    - name: Удалить dummy-cert
+      ansible.builtin.command:
+        cmd: >
+          docker compose run --rm --entrypoint
+          "sh -c 'rm -rf /etc/letsencrypt/live/{{ primary_domain }}
+                          /etc/letsencrypt/archive/{{ primary_domain }}
+                          /etc/letsencrypt/renewal/{{ primary_domain }}.conf'"
+          certbot
+      args:
+        chdir: "{{ project_dir }}"
+      changed_when: true
+
+    # 4) Реальный certbot
+    - name: Выпустить настоящий cert через certbot --webroot
+      ansible.builtin.command:
+        cmd: >
+          docker compose run --rm --entrypoint
+          "certbot certonly --webroot -w /var/www/certbot
+             --email {{ le_email }} --agree-tos --no-eff-email
+             {{ '--staging' if le_staging | bool else '' }}
+             --force-renewal
+             {% for d in le_domains %} -d {{ d }}{% endfor %}"
+          certbot
+      args:
+        chdir: "{{ project_dir }}"
+      register: certbot_run
+      changed_when: certbot_run.rc == 0
+
+    # 5) Reload nginx — подхватить настоящий cert
+    - name: nginx reload
+      ansible.builtin.command:
+        cmd: docker compose exec -T nginx nginx -s reload
+      args:
+        chdir: "{{ project_dir }}"
+      changed_when: true
+
+    - name: Готово
+      ansible.builtin.debug:
+        msg: "Cert для {{ le_domains | join(', ') }} выпущен. Проверьте: curl -fsS https://{{ primary_domain }}/api/health"
+</file>
+
+<file path="ansible/.gitignore">
+inventory.ini
+.facts_cache/
+collections/
+*.retry
+</file>
+
+<file path="ansible/ansible.cfg">
+[defaults]
+inventory          = inventory.ini
+roles_path         = roles
+collections_path   = collections
+host_key_checking  = True
+retry_files_enabled = False
+stdout_callback    = default
+result_format      = yaml
+interpreter_python = auto_silent
+forks              = 5
+gathering          = smart
+fact_caching       = jsonfile
+fact_caching_connection = .facts_cache
+fact_caching_timeout    = 3600
+
+[ssh_connection]
+pipelining = True
+ssh_args   = -o ControlMaster=auto -o ControlPersist=60s -o ServerAliveInterval=30
+
+[privilege_escalation]
+become        = False
+become_method = sudo
+</file>
+
+<file path="ansible/inventory.example.ini">
+# Скопируйте в inventory.ini и при необходимости поправьте.
+# inventory.ini в .gitignore — это локальный файл, не коммитится.
+
+[prod]
+agent-dialogue ansible_host=176.108.249.8 ansible_user=agent
+
+[prod:vars]
+ansible_python_interpreter = /usr/bin/python3
+</file>
+
+<file path="ansible/README.md">
+# Ansible для agent-dialogue.ru
+
+Три плейбука, каждый — отдельный шаг жизненного цикла:
+
+| Когда          | Команда                                                     | Что делает                                 |
+|----------------|-------------------------------------------------------------|--------------------------------------------|
+| Один раз       | `ansible-playbook playbooks/bootstrap.yml`                  | Docker, юзер, ufw, репо, `.env`            |
+| Один раз       | `ansible-playbook playbooks/tls.yml`                        | Выпуск Let's Encrypt cert (dummy-trick)    |
+| Каждую выкатку | `ansible-playbook playbooks/deploy.yml -e image_tag=<sha>`  | Pull образа, restart, healthcheck          |
+
+CI запускает только `deploy.yml`. `bootstrap.yml` и `tls.yml` выполняются вручную с локалки один раз.
+
+## Установка локально
+
+```bash
+pip install "ansible-core>=2.16"
+cd ansible
+ansible-galaxy collection install -r requirements.yml
+cp inventory.example.ini inventory.ini   # при необходимости поправьте host/user
+```
+
+Проверка коннекта:
+
+```bash
+ansible prod -m ping
+```
+
+## Полный сценарий с нуля
+
+1. **DNS:** `agent-dialogue.ru` и `www.agent-dialogue.ru` → `176.108.249.8`.
+
+2. **Bootstrap:**
+   ```bash
+   ansible-playbook playbooks/bootstrap.yml
+   ```
+   После этого ssh-нитесь на сервер и заполните `.env`:
+   ```bash
+   ssh agent@176.108.249.8 'sudo nano /opt/agent-dialogue/.env'
+   ```
+   Минимум: `OPENAI_API_KEY`.
+
+3. **TLS-cert:**
+   ```bash
+   # Сначала проверим на staging-сервере Let's Encrypt (нет rate-limit):
+   ansible-playbook playbooks/tls.yml -e le_staging=true
+
+   # Когда убедились, что всё работает — боевой cert:
+   ansible-playbook playbooks/tls.yml -e force_renew=true
+   ```
+
+4. **Первый деплой:**
+   ```bash
+   ansible-playbook playbooks/deploy.yml
+   ```
+   После этого `https://agent-dialogue.ru/api/health` должен отдавать `{"ok": true}`.
+
+## Регулярные операции
+
+### Дернуть конкретный SHA (откат)
+```bash
+ansible-playbook playbooks/deploy.yml -e image_tag=abc123def456
+```
+
+### Перевыпустить cert вручную
+```bash
+ansible-playbook playbooks/tls.yml -e force_renew=true
+```
+(certbot-контейнер в compose сам делает `renew` раз в 12 часов — этот шаг нужен только при смене домена / профилактике.)
+
+### Только проверить состояние, ничего не менять
+```bash
+ansible-playbook playbooks/deploy.yml --check --diff
+```
+
+### Запустить что-то одно на сервере
+```bash
+ansible prod -m command -a 'docker compose ps' --become --become-user agent
+ansible prod -m command -a 'docker compose logs --tail=50 app' --become --become-user agent
+```
+
+## CI-сторона
+
+`.github/workflows/deploy.yml` использует environment `prod` со следующими secrets:
+
+| Secret             | Назначение                                                 |
+|--------------------|-----------------------------------------------------------|
+| `SSH_PRIVATE_KEY`  | Приватный ключ, чьим public-полем настроен `agent@vps`     |
+| `SSH_HOST`         | IP или DNS-имя сервера                                    |
+| `SSH_USER`         | `agent`                                                   |
+| `GITHUB_TOKEN`     | Авто-токен GH (push в GHCR — public package)              |
+
+На каждый push в `main`:
+1. CI собирает образ → пушит в `ghcr.io/ilya0217/agent-dialogue-sim:<sha>` + `:latest`.
+2. CI рендерит inventory.ini из secrets, ставит ansible-core + community.general.
+3. Запускает `playbooks/deploy.yml` с `image_tag=<sha>`.
+4. Playbook сам делает smoke-тест `https://agent-dialogue.ru/api/health` через `uri:` (с локалки runner-а, через настоящий nginx).
+
+## Структура
+
+```
+ansible/
+  ansible.cfg
+  requirements.yml
+  inventory.example.ini       # шаблон
+  inventory.ini               # локальный, в .gitignore
+  group_vars/all.yml          # репо, домены, образ, le-настройки
+  playbooks/
+    bootstrap.yml
+    tls.yml
+    deploy.yml
+  README.md                   # этот файл
+```
+</file>
+
+<file path="ansible/requirements.yml">
+---
+collections:
+  # 12.x — последняя ветка, совместимая с ansible-core 2.17 (которым ставится в CI).
+  # При апгрейде ansible-core до 2.18+ можно поднять до 13.x.
+  - name: community.general
+    version: ">=10.0.0,<13.0.0"
 </file>
 
 <file path="core/__init__.py">
@@ -22002,6 +22794,13 @@ class AppState:
 STATE = AppState()
 
 
+@app.route("/api/health")
+def api_health():
+    # Лёгкий liveness-probe для Docker HEALTHCHECK, nginx и CI smoke-теста.
+    # Не делаем сетевых вызовов и не трогаем глобальное состояние.
+    return jsonify({"ok": True, "service": "agent-dialogue-sim"})
+
+
 @app.route("/")
 def index():
     envs = list_env_contexts()
@@ -22936,6 +23735,89 @@ if __name__ == "__main__":
 __all__ = []
 </file>
 
+<file path=".dockerignore">
+# VCS / IDE
+.git
+.gitignore
+.github
+.claude
+.opencode
+.idea
+.vscode
+.DS_Store
+
+# Python build artefacts
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.egg-info
+build
+dist
+
+# Local virtualenv (~400 MB) — никогда не должно попадать в образ
+.venv
+venv
+env
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Большие артефакты репозитория, не нужные приложению
+repomix-output.xml
+docs
+uml_diagrams
+tests
+scientific_report.md
+README.md
+
+# Runtime-выгрузки симулятора
+temp
+experiments/results
+**/outputs/graph_turn_*.png
+**/outputs/metrics_turn_*.md
+**/logs/dialog.*
+
+# Сам деплой-набор и compose — приложению не нужны
+Dockerfile
+docker-compose*.yml
+deploy
+nginx*.conf
+</file>
+
+<file path=".env.example">
+# Скопируйте в .env и заполните реальными значениями.
+# .env лежит рядом с docker-compose.yml на сервере и НЕ коммитится.
+
+# --- LLM-провайдер (обязательно один) -------------------------------------
+# OpenAI:
+OPENAI_API_KEY=sk-...
+# OpenAI-совместимый прокси (например, OpenRouter / DeepSeek) — опционально:
+# OPENAI_BASE_URL=https://api.deepseek.com/v1
+# OPENAI_MODEL=deepseek-chat
+OPENAI_MODEL=gpt-4o-mini
+
+# --- Поведение симулятора --------------------------------------------------
+ENV_CONTEXT_INDEX=0
+
+# --- Образ для docker compose (на сервере подставляется деплой-скриптом) ---
+# В CI выставляется на ghcr.io/ilya0217/agent-dialogue-sim:<sha>.
+# Локально оставьте пустым, чтобы docker compose build собрал из исходников.
+APP_IMAGE=ghcr.io/ilya0217/agent-dialogue-sim:latest
+
+# --- Параметры выпуска Let's Encrypt (используются deploy/init-letsencrypt.sh)
+LETSENCRYPT_EMAIL=admin@agent-dialogue.ru
+LETSENCRYPT_DOMAINS=agent-dialogue.ru www.agent-dialogue.ru
+# На время отладки certbot можно включить staging (избежать rate-limit):
+# LETSENCRYPT_STAGING=1
+</file>
+
 <file path=".gitignore">
 .env
 .env.local
@@ -23047,6 +23929,165 @@ HUMAN_TO_AGENT_RATIO = 2        # N human turns before 1 agent turn
 HUMAN_TURN_TIMEOUT = 300        # seconds to wait for human input before auto-skip
 </file>
 
+<file path="docker-compose.yml">
+# Production-стек для agent-dialogue.ru (VPS 176.108.249.8, Ubuntu 24.04 LTS)
+#
+# Поднимает три сервиса:
+#   - app     : Flask + Gunicorn (4 воркера), внутренний порт 5000
+#   - nginx   : reverse-proxy + TLS-терминация, порты 80/443
+#   - certbot : выпуск/обновление Let's Encrypt сертификатов
+#
+# Перед первым запуском:
+#   1) Создать .env рядом с этим файлом (OPENAI_API_KEY=..., и т.п.).
+#   2) Выпустить сертификат (одноразово):
+#        docker compose run --rm certbot certonly \
+#          --webroot -w /var/www/certbot \
+#          -d agent-dialogue.ru -d www.agent-dialogue.ru \
+#          --email admin@agent-dialogue.ru --agree-tos --no-eff-email
+#      На время выпуска nginx должен слушать 80-й порт (см. server-блок для ACME).
+#   3) docker compose up -d
+
+services:
+  app:
+    # На сервере APP_IMAGE подставляется деплой-скриптом и указывает
+    # на конкретный тег в GHCR (ghcr.io/ilya0217/agent-dialogue-sim:<sha>).
+    # Локально, если переменная не задана, compose соберёт образ из исходников
+    # с тегом agent-dialogue-sim:latest.
+    image: ${APP_IMAGE:-agent-dialogue-sim:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    pull_policy: ${APP_PULL_POLICY:-missing}
+    container_name: agent-dialogue-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Переопределяем рантайм-каталоги, чтобы артефакты ложились в volume
+      AGENT_RUNTIME_DIR: /data
+      AGENT_LOG_DIR: /data/logs
+      AGENT_OUTPUT_DIR: /data/outputs
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - app_data:/data
+    expose:
+      - "5000"
+    networks:
+      - web
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: agent-dialogue-nginx
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - certbot_etc:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
+    networks:
+      - web
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  certbot:
+    image: certbot/certbot:latest
+    container_name: agent-dialogue-certbot
+    restart: unless-stopped
+    volumes:
+      - certbot_etc:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    # Раз в 12 часов пытаемся обновить сертификат; nginx перечитывает конфиг ежедневно.
+    entrypoint: /bin/sh -c "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done"
+
+networks:
+  web:
+    driver: bridge
+
+volumes:
+  app_data:
+  certbot_etc:
+  certbot_www:
+</file>
+
+<file path="Dockerfile">
+# syntax=docker/dockerfile:1.6
+FROM python:3.12-slim AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    AGENT_RUNTIME_DIR=/data \
+    AGENT_LOG_DIR=/data/logs \
+    AGENT_OUTPUT_DIR=/data/outputs
+
+# matplotlib/scipy/numpy нужны небольшие системные библиотеки
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        build-essential \
+        curl \
+        libfreetype6 \
+        libpng16-16 \
+        libopenblas0 \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Сначала только requirements — кэшируем слой со слоем зависимостей
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt \
+ && pip install --no-cache-dir "gunicorn==22.0.0"
+
+# Копируем пакет как agent_dialogue_sim, чтобы работали относительные импорты
+# (webapp/app.py: from ..config import ...)
+COPY __init__.py        /app/agent_dialogue_sim/__init__.py
+COPY config.py          /app/agent_dialogue_sim/config.py
+COPY utils.py           /app/agent_dialogue_sim/utils.py
+COPY main.py            /app/agent_dialogue_sim/main.py
+COPY analytics          /app/agent_dialogue_sim/analytics
+COPY core               /app/agent_dialogue_sim/core
+COPY science            /app/agent_dialogue_sim/science
+COPY webapp             /app/agent_dialogue_sim/webapp
+COPY experiments        /app/agent_dialogue_sim/experiments
+
+# Каталоги под рантайм-артефакты (логи, графики, отчёты)
+RUN mkdir -p /data/logs /data/outputs \
+ && useradd --create-home --shell /usr/sbin/nologin app \
+ && chown -R app:app /app /data
+
+USER app
+
+EXPOSE 5000
+
+# Healthcheck по /api/health (см. CD smoke-test)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:5000/api/health || exit 1
+
+# 4 воркера gunicorn — как на схеме
+CMD ["gunicorn", \
+     "--bind", "0.0.0.0:5000", \
+     "--workers", "4", \
+     "--threads", "2", \
+     "--timeout", "120", \
+     "--graceful-timeout", "30", \
+     "--access-logfile", "-", \
+     "--error-logfile", "-", \
+     "agent_dialogue_sim.webapp.app:app"]
+</file>
+
 <file path="main.py">
 from openai import OpenAI
 from pathlib import Path
@@ -23147,6 +24188,146 @@ def main():
 
 if __name__ == "__main__":
     main()
+</file>
+
+<file path="nginx.conf">
+# nginx.conf — reverse-proxy для agent-dialogue.ru
+# Терминация TLS, апстрим — Gunicorn (Flask) в контейнере app:5000.
+
+user  nginx;
+worker_processes  auto;
+
+error_log  /var/log/nginx/error.log warn;
+pid        /var/run/nginx.pid;
+
+events {
+    worker_connections  1024;
+    multi_accept        on;
+}
+
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+
+    log_format main '$remote_addr - $remote_user [$time_local] '
+                    '"$request" $status $body_bytes_sent '
+                    '"$http_referer" "$http_user_agent" rt=$request_time';
+    access_log /var/log/nginx/access.log main;
+
+    sendfile        on;
+    tcp_nopush      on;
+    tcp_nodelay     on;
+    keepalive_timeout 65;
+    server_tokens   off;
+
+    client_max_body_size 16m;
+
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_proxied any;
+    gzip_types
+        text/plain
+        text/css
+        text/javascript
+        application/javascript
+        application/json
+        application/xml
+        image/svg+xml;
+
+    # Апстрим к Gunicorn (имя сервиса из docker-compose, разрешается Docker DNS)
+    upstream agent_dialogue_app {
+        server app:5000 fail_timeout=10s max_fails=3;
+        keepalive 32;
+    }
+
+    # --- HTTP (80): ACME challenge + redirect на HTTPS ---------------------
+    server {
+        listen      80;
+        listen      [::]:80;
+        server_name agent-dialogue.ru www.agent-dialogue.ru;
+
+        # Точка для webroot-валидации Let's Encrypt
+        location /.well-known/acme-challenge/ {
+            root /var/www/certbot;
+            default_type "text/plain";
+        }
+
+        # Локальный healthcheck nginx-контейнера
+        location = /healthz {
+            access_log off;
+            return 200 "ok\n";
+        }
+
+        # Всё остальное — на HTTPS
+        location / {
+            return 301 https://$host$request_uri;
+        }
+    }
+
+    # --- HTTPS (443): основной сервер -------------------------------------
+    server {
+        listen      443 ssl;
+        listen      [::]:443 ssl;
+        http2       on;
+        server_name agent-dialogue.ru www.agent-dialogue.ru;
+
+        ssl_certificate     /etc/letsencrypt/live/agent-dialogue.ru/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/agent-dialogue.ru/privkey.pem;
+        ssl_trusted_certificate /etc/letsencrypt/live/agent-dialogue.ru/chain.pem;
+
+        # Современные настройки TLS (Mozilla intermediate)
+        ssl_protocols         TLSv1.2 TLSv1.3;
+        ssl_prefer_server_ciphers off;
+        ssl_ciphers           ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+        ssl_session_cache     shared:SSL:10m;
+        ssl_session_timeout   1d;
+        ssl_session_tickets   off;
+        ssl_stapling          on;
+        ssl_stapling_verify   on;
+        resolver              1.1.1.1 8.8.8.8 valid=300s;
+        resolver_timeout      5s;
+
+        # HSTS + базовые security-заголовки
+        add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+        add_header X-Content-Type-Options    "nosniff" always;
+        add_header X-Frame-Options           "SAMEORIGIN" always;
+        add_header Referrer-Policy           "strict-origin-when-cross-origin" always;
+
+        # Раздаём статику Flask напрямую, минуя Gunicorn (если /static смонтирован).
+        # По умолчанию идём через апстрим — у статика небольшая, оверхеда не даёт.
+
+        # Smoke-test для CD (Ansible) — без access-лога, чтобы не засорять
+        location = /api/health {
+            access_log off;
+            proxy_pass         http://agent_dialogue_app;
+            proxy_http_version 1.1;
+            proxy_set_header   Host              $host;
+            proxy_set_header   X-Real-IP         $remote_addr;
+            proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+            proxy_set_header   X-Forwarded-Proto $scheme;
+        }
+
+        # Основной reverse-proxy на Gunicorn
+        location / {
+            proxy_pass         http://agent_dialogue_app;
+            proxy_http_version 1.1;
+            proxy_set_header   Host              $host;
+            proxy_set_header   X-Real-IP         $remote_addr;
+            proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+            proxy_set_header   X-Forwarded-Proto $scheme;
+            proxy_set_header   Connection        "";
+
+            # Длинные LLM-запросы — даём время до 120с (как timeout у gunicorn)
+            proxy_connect_timeout 10s;
+            proxy_send_timeout    120s;
+            proxy_read_timeout    120s;
+
+            proxy_buffering       on;
+            proxy_request_buffering on;
+        }
+    }
+}
 </file>
 
 <file path="README.md">
