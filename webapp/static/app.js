@@ -330,6 +330,10 @@ newSessionBtn.addEventListener('click', () => {
   stepBtn.disabled = true;
   stepBtn.textContent = 'Следующий ход';
   if (participateBtn) participateBtn.style.display = 'none';
+  // Сразу чистим старый диалог из DOM, чтобы он не мелькнул при следующем входе.
+  renderHistory([]);
+  renderHyps([]);
+  statusEl.textContent = '';
   mainApp.style.display = 'none';
   setupWizard.style.display = 'flex';
   step2.classList.remove('active');

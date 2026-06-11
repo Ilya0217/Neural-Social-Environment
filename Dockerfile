@@ -51,11 +51,14 @@ EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD curl -fsS http://127.0.0.1:5000/api/health || exit 1
 
-# 4 воркера gunicorn — как на схеме
+# ВАЖНО: ровно 1 воркер. Состояние сессии (STATE в webapp/app.py) живёт в памяти
+# процесса и НЕ разделяется между воркерами. С несколькими воркерами запросы
+# раскидываются round-robin, и /api/step попадает на воркер со старой сессией —
+# в UI всплывает старый диалог. Concurrency обеспечиваем потоками, не воркерами.
 CMD ["gunicorn", \
      "--bind", "0.0.0.0:5000", \
-     "--workers", "4", \
-     "--threads", "2", \
+     "--workers", "1", \
+     "--threads", "4", \
      "--timeout", "120", \
      "--graceful-timeout", "30", \
      "--access-logfile", "-", \
