@@ -198,10 +198,19 @@ class CausalExperimentResult:
 OutcomeFn = Callable[[int, dict, dict], dict]
 
 
-def _build_real_outcome_fn() -> OutcomeFn:
+def _build_real_outcome_fn(
+    api_key: str | None = None,
+    base_url: str | None = None,
+    model: str | None = None,
+) -> OutcomeFn:
     """Возвращает функцию, запускающую один реальный диалог через DialogueManager.
 
     Сигнатура: outcome_fn(seed, agent_overrides_for_target, dialogue_cfg) -> dict_with_metrics
+
+    Креды (api_key/base_url/model) можно передать явно — например, токен,
+    введённый пользователем в UI каузальных интервенций. Если не переданы,
+    берутся из серверного окружения (config). Это позволяет не хранить ключ
+    на сервере, а брать его из запроса.
     """
     from openai import OpenAI
 
@@ -216,16 +225,28 @@ def _build_real_outcome_fn() -> OutcomeFn:
     from ..core.env_context import get_env_context_by_index
     from ..analytics.basic import compute_metrics
 
+    effective_key = (api_key or "").strip() or OPENAI_API_KEY
+    effective_base_url = (base_url or "").strip() or OPENAI_BASE_URL
+    effective_model = (model or "").strip() or None
+
+    # Применяем модель глобально (как webapp.AppState.reset), чтобы DialogueManager
+    # использовал именно её (напр. deepseek-chat), а не дефолтный gpt-4o-mini.
+    if effective_model:
+        from .. import config as _cfg
+        from ..core import dialogue_manager as _dm_mod
+        _cfg.MODEL = effective_model
+        _dm_mod.MODEL = effective_model
+
     def fn(seed: int, agent_overrides_for_target: dict, dialogue_cfg: dict) -> dict:
-        if not OPENAI_API_KEY:
-            raise RuntimeError("OPENAI_API_KEY is not set; cannot run real causal dialogue")
+        if not effective_key:
+            raise RuntimeError("API key is not set; cannot run real causal dialogue")
 
         random.seed(seed)
         np.random.seed(seed % (2**31 - 1))
 
-        client_kwargs = {"api_key": OPENAI_API_KEY}
-        if OPENAI_BASE_URL:
-            client_kwargs["base_url"] = OPENAI_BASE_URL
+        client_kwargs = {"api_key": effective_key}
+        if effective_base_url:
+            client_kwargs["base_url"] = effective_base_url
         client = OpenAI(**client_kwargs)
 
         env_context = get_env_context_by_index(dialogue_cfg.get("env_context_index", 0))
@@ -431,9 +452,19 @@ class CausalRunner:
     метрики оценивается ATE через paired_t_test_ate.
     """
 
-    def __init__(self, config: CausalConfig, outcome_fn: OutcomeFn | None = None):
+    def __init__(
+        self,
+        config: CausalConfig,
+        outcome_fn: OutcomeFn | None = None,
+        *,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        model: str | None = None,
+    ):
         self.config = config
-        self.outcome_fn = outcome_fn or _build_real_outcome_fn()
+        self.outcome_fn = outcome_fn or _build_real_outcome_fn(
+            api_key=api_key, base_url=base_url, model=model
+        )
 
     def _build_overrides(self, intervention: Intervention) -> dict:
         ov = intervention.apply_to_agent_overrides({})

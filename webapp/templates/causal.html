@@ -87,6 +87,20 @@
             <h3 style="margin-top:0;">Запустить новый эксперимент</h3>
             <div class="form-row">
                 <div>
+                    <label>LLM-провайдер</label>
+                    <select id="causalProvider">
+                        <option value="deepseek">DeepSeek (работает из РФ)</option>
+                        <option value="chatgpt">ChatGPT (OpenAI)</option>
+                    </select>
+                </div>
+                <div style="grid-column: span 2;">
+                    <label>API-токен</label>
+                    <input type="password" id="causalApiToken" autocomplete="off"
+                           placeholder="sk-…  (хранится только в браузере, на сервер не сохраняется)">
+                </div>
+            </div>
+            <div class="form-row">
+                <div>
                     <label>Целевой агент</label>
                     <select id="targetAgent">
                         <option value="Critic">Critic</option>
@@ -439,9 +453,27 @@
     };
     $('refreshBtn').onclick = refreshList;
 
+    // Провайдер запоминаем между сессиями; токен — только в памяти, в localStorage НЕ пишем.
+    (function initCausalProvider() {
+        const saved = localStorage.getItem('causalProvider');
+        if (saved) $('causalProvider').value = saved;
+        $('causalProvider').addEventListener('change', () => {
+            localStorage.setItem('causalProvider', $('causalProvider').value);
+        });
+    })();
+
     // Запуск нового эксперимента
     $('runBtn').onclick = async () => {
+        const apiKey = $('causalApiToken').value.trim();
+        if (!apiKey) {
+            $('jobStatus').textContent = 'Введите API-токен провайдера.';
+            $('jobStatus').className = 'status error';
+            $('causalApiToken').focus();
+            return;
+        }
         const params = {
+            provider: $('causalProvider').value,
+            api_key: apiKey,
             target_agent: $('targetAgent').value,
             trait: $('trait').value,
             treatment_value: parseFloat($('treatmentValue').value),

@@ -1264,8 +1264,18 @@ def api_causal_pair(exp_dir: str, seed: int):
     return jsonify({"ok": False, "error": f"seed {seed} not found"}), 404
 
 
-def _run_causal_job(job_id: str, params: Dict[str, Any]) -> None:
-    """Запускает CausalRunner в фоне; обновляет _CAUSAL_JOBS[job_id]."""
+def _run_causal_job(
+    job_id: str,
+    params: Dict[str, Any],
+    creds: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Запускает CausalRunner в фоне; обновляет _CAUSAL_JOBS[job_id].
+
+    creds = {api_key, base_url, model} — креды, введённые пользователем в UI.
+    Передаются отдельным аргументом (НЕ через params), чтобы ключ не попал ни
+    в config.json на диске, ни в ответ /api/causal/jobs.
+    """
+    creds = creds or {}
     try:
         treat = _TraitIntervention(
             name="treatment",
@@ -1292,7 +1302,12 @@ def _run_causal_job(job_id: str, params: Dict[str, Any]) -> None:
             alpha=float(params.get("alpha", 0.05)),
             d_threshold=float(params.get("d_threshold", 0.3)),
         )
-        runner = _CausalRunner(cfg)
+        runner = _CausalRunner(
+            cfg,
+            api_key=creds.get("api_key"),
+            base_url=creds.get("base_url"),
+            model=creds.get("model"),
+        )
         with _CAUSAL_JOBS_LOCK:
             _CAUSAL_JOBS[job_id]["status"] = "running"
         result = runner.run(_RESULTS_BASE)
@@ -1334,15 +1349,30 @@ def api_causal_run():
     if int(data["n_turns"]) < 2 or int(data["n_turns"]) > 20:
         return jsonify({"ok": False, "error": "n_turns must be in [2, 20]"}), 400
 
+    # Провайдер + токен вводит пользователь в UI (на сервере не хранится).
+    # Извлекаем ИЗ data, чтобы ключ не попал в _CAUSAL_JOBS["params"] (его
+    # отдаёт /api/causal/jobs) и в config.json на диске.
+    provider = str(data.pop("provider", "") or "").strip().lower()
+    api_key = str(data.pop("api_key", "") or "").strip()
+    if not api_key:
+        return jsonify({"ok": False, "error": "Введите API-токен провайдера."}), 400
+    provider_specs = {
+        "chatgpt":  {"base_url": None, "model": "gpt-4o-mini"},
+        "openai":   {"base_url": None, "model": "gpt-4o-mini"},
+        "deepseek": {"base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat"},
+    }
+    spec = provider_specs.get(provider, {"base_url": None, "model": None})
+    creds = {"api_key": api_key, "base_url": spec["base_url"], "model": spec["model"]}
+
     job_id = _uuid.uuid4().hex[:12]
     with _CAUSAL_JOBS_LOCK:
         _CAUSAL_JOBS[job_id] = {
             "job_id": job_id,
-            "params": data,
+            "params": data,  # без api_key — он удалён через pop выше
             "status": "queued",
             "started_at": time.time(),
         }
-    t = threading.Thread(target=_run_causal_job, args=(job_id, data), daemon=True)
+    t = threading.Thread(target=_run_causal_job, args=(job_id, data, creds), daemon=True)
     t.start()
     return jsonify({"ok": True, "job_id": job_id})
 
