@@ -119,10 +119,10 @@ let userParticipating = false;
 
 // Extended default agent configurations for up to 20 agents
 const DEFAULT_AGENT_NAMES = [
-  'Alex', 'Jordan', 'Sam', 'Riley', 'Casey',
-  'Morgan', 'Taylor', 'Quinn', 'Avery', 'Parker',
-  'Skyler', 'Drew', 'Blake', 'Charlie', 'Emery',
-  'Finley', 'Harper', 'Jamie', 'Kendall', 'Logan'
+  'Александр', 'Мария', 'Дмитрий', 'Анна', 'Сергей',
+  'Елена', 'Иван', 'Ольга', 'Андрей', 'Наталья',
+  'Михаил', 'Татьяна', 'Алексей', 'Екатерина', 'Никита',
+  'Юлия', 'Павел', 'Софья', 'Роман', 'Дарья'
 ];
 
 const DEFAULT_COLORS = [
@@ -134,10 +134,10 @@ const DEFAULT_COLORS = [
 
 // Default roles for agent initialization
 const DEFAULT_ROLES = [
-  'Explorer', 'Critic', 'Facilitator', 'Analyst', 'Visionary',
-  'Scientist', 'Manager', 'Designer', 'Developer', 'Researcher',
-  'Strategist', 'Innovator', 'Mentor', 'Coordinator', 'Specialist',
-  'Architect', 'Planner', 'Advisor', 'Engineer', 'Consultant'
+  'Исследователь', 'Критик', 'Фасилитатор', 'Аналитик', 'Визионер',
+  'Учёный', 'Менеджер', 'Дизайнер', 'Разработчик', 'Научный сотрудник',
+  'Стратег', 'Новатор', 'Наставник', 'Координатор', 'Специалист',
+  'Архитектор', 'Планировщик', 'Советник', 'Инженер', 'Консультант'
 ];
 
 // ==================== TAB LOGIC ====================

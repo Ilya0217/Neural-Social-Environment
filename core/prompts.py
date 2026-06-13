@@ -128,9 +128,9 @@ How to sound human without becoming random:
 
 # === Environment initialization presets ===
 ENV_CONTEXTS: List[str] = [
-    "University: Planning an AI coursework project",
-    "Startup: Prioritizing MVP features and roadmap",
-    "Research seminar: Reviewing a paper and planning experiments",
+    "Университет: планирование курсового проекта по ИИ",
+    "Стартап: приоритизация фич MVP и дорожной карты",
+    "Научный семинар: разбор статьи и планирование экспериментов",
 ]
 
 def list_env_contexts() -> List[str]:
