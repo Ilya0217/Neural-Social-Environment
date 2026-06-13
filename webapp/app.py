@@ -1299,6 +1299,11 @@ def _run_causal_job(job_id: str, params: Dict[str, Any]) -> None:
         report_md = _build_scientific_report(result)
         out_dir = Path(result.config["output_dir"])
         (out_dir / "REPORT.md").write_text(report_md, encoding="utf-8")
+        # Развёрнутый научный отчёт для UI-кнопки «НАУЧНЫЙ_ОТЧЁТ.md».
+        # build_scientific_report уже формирует полный научный отчёт, поэтому
+        # дублируем его сюда — иначе веб-запуск не создаёт этот файл и кнопка
+        # в causal.html выдаёт «НАУЧНЫЙ_ОТЧЁТ.md не найден».
+        (out_dir / "НАУЧНЫЙ_ОТЧЁТ.md").write_text(report_md, encoding="utf-8")
         with _CAUSAL_JOBS_LOCK:
             _CAUSAL_JOBS[job_id]["status"] = "done"
             _CAUSAL_JOBS[job_id]["result_dir"] = out_dir.name
